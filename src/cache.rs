@@ -34,8 +34,7 @@ pub fn write_cache(path: &Path, games: &[Game], source: &str) -> io::Result<()> 
         source: source.to_string(),
         games: games.to_vec(),
     };
-    let json = serde_json::to_string_pretty(&data)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(&data).map_err(io::Error::other)?;
     std::fs::write(path, json)
 }
 

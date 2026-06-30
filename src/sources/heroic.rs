@@ -31,7 +31,10 @@ pub fn load_gog(path: &Path) -> Vec<Game> {
         .filter(|g| g.get("app_name").and_then(|v| v.as_str()) != Some("gog-redist"))
         .filter_map(|g| {
             let name = g.get("title")?.as_str()?;
-            Some(Game { name: name.to_string(), platform: "gog".to_string() })
+            Some(Game {
+                name: name.to_string(),
+                platform: "gog".to_string(),
+            })
         })
         .collect()
 }
@@ -52,7 +55,10 @@ fn load_heroic_library(path: &Path, key: &str, platform: &str) -> Vec<Game> {
         .iter()
         .filter_map(|g| {
             let name = g.get("title")?.as_str()?;
-            Some(Game { name: name.to_string(), platform: platform.to_string() })
+            Some(Game {
+                name: name.to_string(),
+                platform: platform.to_string(),
+            })
         })
         .collect()
 }

@@ -1,7 +1,6 @@
 use crate::Game;
 
-pub const STEAM_API_URL: &str =
-    "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
+pub const STEAM_API_URL: &str = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
 
 /// Fetches the owned game library for a Steam user via the Steam Web API.
 pub fn fetch_steam_library(api_key: &str, steam_id: &str) -> Result<Vec<Game>, String> {
@@ -10,8 +9,9 @@ pub fn fetch_steam_library(api_key: &str, steam_id: &str) -> Result<Vec<Game>, S
         STEAM_API_URL, api_key, steam_id
     );
     let body: serde_json::Value = {
-        let mut response =
-            ureq::get(&url).call().map_err(|e| format!("HTTP request failed: {e}"))?;
+        let mut response = ureq::get(&url)
+            .call()
+            .map_err(|e| format!("HTTP request failed: {e}"))?;
         let text = response
             .body_mut()
             .read_to_string()
@@ -21,15 +21,18 @@ pub fn fetch_steam_library(api_key: &str, steam_id: &str) -> Result<Vec<Game>, S
     Ok(parse_steam_response(&body))
 }
 
-const RESOLVE_VANITY_URL: &str =
-    "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/";
+const RESOLVE_VANITY_URL: &str = "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/";
 
 /// Resolves a Steam vanity name to a 64-bit Steam ID via the Web API.
 pub fn resolve_vanity_url(api_key: &str, vanity_name: &str) -> Result<String, String> {
-    let url = format!("{}?key={}&vanityurl={}", RESOLVE_VANITY_URL, api_key, vanity_name);
+    let url = format!(
+        "{}?key={}&vanityurl={}",
+        RESOLVE_VANITY_URL, api_key, vanity_name
+    );
     let body: serde_json::Value = {
-        let mut response =
-            ureq::get(&url).call().map_err(|e| format!("HTTP request failed: {e}"))?;
+        let mut response = ureq::get(&url)
+            .call()
+            .map_err(|e| format!("HTTP request failed: {e}"))?;
         let text = response
             .body_mut()
             .read_to_string()

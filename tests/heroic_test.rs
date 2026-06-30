@@ -1,6 +1,6 @@
 use backlog::sources::heroic;
-use tempfile::TempDir;
 use std::fs;
+use tempfile::TempDir;
 
 fn write_json(dir: &TempDir, filename: &str, content: &str) -> std::path::PathBuf {
     let path = dir.path().join(filename);
@@ -11,12 +11,16 @@ fn write_json(dir: &TempDir, filename: &str, content: &str) -> std::path::PathBu
 #[test]
 fn test_load_epic_extracts_titles() {
     let dir = TempDir::new().unwrap();
-    let path = write_json(&dir, "legendary_library.json", r#"{
+    let path = write_json(
+        &dir,
+        "legendary_library.json",
+        r#"{
         "library": [
             {"title": "Celeste", "app_name": "abc123"},
             {"title": "Hades", "app_name": "def456"}
         ]
-    }"#);
+    }"#,
+    );
     let games = heroic::load_epic(&path);
     assert_eq!(games.len(), 2);
     assert_eq!(games[0].name, "Celeste");
@@ -27,12 +31,16 @@ fn test_load_epic_extracts_titles() {
 #[test]
 fn test_load_gog_filters_redist() {
     let dir = TempDir::new().unwrap();
-    let path = write_json(&dir, "gog_library.json", r#"{
+    let path = write_json(
+        &dir,
+        "gog_library.json",
+        r#"{
         "games": [
             {"title": "Hollow Knight", "app_name": "hollow_knight"},
             {"title": "Galaxy Common Redistributables", "app_name": "gog-redist"}
         ]
-    }"#);
+    }"#,
+    );
     let games = heroic::load_gog(&path);
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].name, "Hollow Knight");
@@ -42,11 +50,15 @@ fn test_load_gog_filters_redist() {
 #[test]
 fn test_load_amazon_extracts_titles() {
     let dir = TempDir::new().unwrap();
-    let path = write_json(&dir, "nile_library.json", r#"{
+    let path = write_json(
+        &dir,
+        "nile_library.json",
+        r#"{
         "library": [
             {"title": "Castle on the Coast", "app_name": "amzn1.abc"}
         ]
-    }"#);
+    }"#,
+    );
     let games = heroic::load_amazon(&path);
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].name, "Castle on the Coast");
@@ -71,7 +83,10 @@ fn test_load_epic_handles_empty_library() {
 #[test]
 fn test_load_gog_handles_extra_fields_gracefully() {
     let dir = TempDir::new().unwrap();
-    let path = write_json(&dir, "gog_library.json", r#"{
+    let path = write_json(
+        &dir,
+        "gog_library.json",
+        r#"{
         "games": [
             {
                 "title": "Fruitbus",
@@ -82,7 +97,8 @@ fn test_load_gog_handles_extra_fields_gracefully() {
                 "install": {"is_dlc": false}
             }
         ]
-    }"#);
+    }"#,
+    );
     let games = heroic::load_gog(&path);
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].name, "Fruitbus");

@@ -1,23 +1,26 @@
 use backlog::{cache, sync};
-use tempfile::TempDir;
 use std::fs;
+use tempfile::TempDir;
 
 fn setup_heroic_dir(dir: &TempDir) {
     fs::write(
         dir.path().join("legendary_library.json"),
         r#"{"library": [{"title": "Celeste", "app_name": "abc"}]}"#,
-    ).unwrap();
+    )
+    .unwrap();
     fs::write(
         dir.path().join("gog_library.json"),
         r#"{"games": [
             {"title": "Hollow Knight", "app_name": "hk"},
             {"title": "Redist", "app_name": "gog-redist"}
         ]}"#,
-    ).unwrap();
+    )
+    .unwrap();
     fs::write(
         dir.path().join("nile_library.json"),
         r#"{"library": [{"title": "The Dig", "app_name": "amzn1"}]}"#,
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 #[test]

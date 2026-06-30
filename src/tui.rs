@@ -4,19 +4,19 @@ use std::path::Path;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
+use crate::LibraryEntry;
 use crate::loader::{self, LoadResult};
 use crate::search;
-use crate::Game;
 
 struct App {
     input: String,
     cursor_pos: usize,
-    games: Vec<Game>,
+    games: Vec<LibraryEntry>,
     selected: usize,
     sync_age: String,
     quit: bool,
@@ -76,10 +76,7 @@ pub fn run_with(load_result: LoadResult) -> io::Result<()> {
     result
 }
 
-fn run_app(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-) -> io::Result<()> {
+fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
     loop {
         terminal.draw(|f| draw(f, app))?;
 
@@ -97,35 +94,29 @@ fn run_app(
                     app.cursor_pos += c.len_utf8();
                     app.selected = 0;
                 }
-                (KeyCode::Backspace, _) => {
-                    if app.cursor_pos > 0 {
-                        let prev = app.input[..app.cursor_pos]
-                            .char_indices()
-                            .next_back()
-                            .map(|(i, _)| i)
-                            .unwrap_or(0);
-                        app.input.drain(prev..app.cursor_pos);
-                        app.cursor_pos = prev;
-                        app.selected = 0;
-                    }
+                (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
+                    let prev = app.input[..app.cursor_pos]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    app.input.drain(prev..app.cursor_pos);
+                    app.cursor_pos = prev;
+                    app.selected = 0;
                 }
-                (KeyCode::Left, _) => {
-                    if app.cursor_pos > 0 {
-                        app.cursor_pos = app.input[..app.cursor_pos]
-                            .char_indices()
-                            .next_back()
-                            .map(|(i, _)| i)
-                            .unwrap_or(0);
-                    }
+                (KeyCode::Left, _) if app.cursor_pos > 0 => {
+                    app.cursor_pos = app.input[..app.cursor_pos]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
                 }
-                (KeyCode::Right, _) => {
-                    if app.cursor_pos < app.input.len() {
-                        app.cursor_pos = app.input[app.cursor_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map(|(i, _)| app.cursor_pos + i)
-                            .unwrap_or(app.input.len());
-                    }
+                (KeyCode::Right, _) if app.cursor_pos < app.input.len() => {
+                    app.cursor_pos = app.input[app.cursor_pos..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| app.cursor_pos + i)
+                        .unwrap_or(app.input.len());
                 }
                 (KeyCode::Down, _) => {
                     app.selected = app.selected.saturating_add(1);
@@ -178,7 +169,8 @@ fn draw(f: &mut Frame, app: &App) {
 
     // Search input row
     let input_display = format!("> {}", app.input);
-    let input_widget = Paragraph::new(input_display.as_str()).style(Style::default().fg(Color::White));
+    let input_widget =
+        Paragraph::new(input_display.as_str()).style(Style::default().fg(Color::White));
     f.render_widget(input_widget, chunks[0]);
 
     // Place blinking cursor after the prompt characters
@@ -219,7 +211,12 @@ fn draw(f: &mut Frame, app: &App) {
         .unwrap_or(0)
         .min(available_width.saturating_sub(10));
 
-    for (i, result) in results.iter().skip(scroll_offset).take(visible_rows).enumerate() {
+    for (i, result) in results
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_rows)
+        .enumerate()
+    {
         let row_y = results_area.y + i as u16;
         if row_y >= results_area.y + results_area.height {
             break;
@@ -242,7 +239,9 @@ fn draw(f: &mut Frame, app: &App) {
             .enumerate()
             .map(|(char_idx, ch)| {
                 let style = if match_set.contains(&(char_idx as u32)) {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
@@ -255,11 +254,15 @@ fn draw(f: &mut Frame, app: &App) {
         let padding = max_name_len.saturating_sub(name_char_count) + 2;
         name_spans.push(Span::raw(" ".repeat(padding)));
 
-        // Platform label with its color
-        name_spans.push(Span::styled(
-            result.game.platform.as_str(),
-            Style::default().fg(platform_color(&result.game.platform)),
-        ));
+        for (i, platform) in result.game.platforms.iter().enumerate() {
+            if i > 0 {
+                name_spans.push(Span::styled(" / ", Style::default().fg(Color::Gray)));
+            }
+            name_spans.push(Span::styled(
+                platform.as_str(),
+                Style::default().fg(platform_color(platform)),
+            ));
+        }
 
         let mut row_style = Style::default();
         if is_selected {

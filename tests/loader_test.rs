@@ -3,12 +3,19 @@ use tempfile::TempDir;
 
 fn setup_caches(dir: &TempDir) {
     let games_steam = vec![
-        Game { name: "Half-Life".to_string(), platform: "steam".to_string() },
-        Game { name: "Portal".to_string(), platform: "steam".to_string() },
+        Game {
+            name: "Half-Life".to_string(),
+            platform: "steam".to_string(),
+        },
+        Game {
+            name: "Portal".to_string(),
+            platform: "steam".to_string(),
+        },
     ];
-    let games_epic = vec![
-        Game { name: "Celeste".to_string(), platform: "epic".to_string() },
-    ];
+    let games_epic = vec![Game {
+        name: "Celeste".to_string(),
+        platform: "epic".to_string(),
+    }];
     cache::write_cache(&dir.path().join("steam.json"), &games_steam, "steam_api").unwrap();
     cache::write_cache(&dir.path().join("epic.json"), &games_epic, "heroic_cache").unwrap();
 }
@@ -21,6 +28,92 @@ fn test_load_all_games_merges_platforms() {
     assert_eq!(result.games.len(), 3);
     assert!(result.warnings.is_empty());
     assert!(result.oldest_update.is_some());
+}
+
+#[test]
+fn test_dedupe_collapses_cross_store_duplicates() {
+    let games = vec![
+        Game {
+            name: "Card Shark".to_string(),
+            platform: "epic".to_string(),
+        },
+        Game {
+            name: "Card Shark".to_string(),
+            platform: "steam".to_string(),
+        },
+    ];
+    let entries = loader::dedupe(games);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "Card Shark");
+    assert_eq!(entries[0].platforms, vec!["epic", "steam"]);
+}
+
+#[test]
+fn test_dedupe_keeps_distinct_games_separate() {
+    let games = vec![
+        Game {
+            name: "Hades".to_string(),
+            platform: "epic".to_string(),
+        },
+        Game {
+            name: "Celeste".to_string(),
+            platform: "epic".to_string(),
+        },
+    ];
+    let entries = loader::dedupe(games);
+    assert_eq!(entries.len(), 2);
+}
+
+#[test]
+fn test_dedupe_folds_case_and_trim_but_keeps_first_seen_display() {
+    let games = vec![
+        Game {
+            name: "Card Shark".to_string(),
+            platform: "epic".to_string(),
+        },
+        Game {
+            name: "  card shark  ".to_string(),
+            platform: "steam".to_string(),
+        },
+    ];
+    let entries = loader::dedupe(games);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "Card Shark");
+    assert_eq!(entries[0].platforms, vec!["epic", "steam"]);
+}
+
+#[test]
+fn test_dedupe_collapses_intra_platform_duplicates() {
+    let games = vec![
+        Game {
+            name: "Portal".to_string(),
+            platform: "steam".to_string(),
+        },
+        Game {
+            name: "Portal".to_string(),
+            platform: "steam".to_string(),
+        },
+    ];
+    let entries = loader::dedupe(games);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].platforms, vec!["steam"]);
+}
+
+#[test]
+fn test_dedupe_preserves_first_seen_order() {
+    let games = vec![
+        Game {
+            name: "Zelda".to_string(),
+            platform: "steam".to_string(),
+        },
+        Game {
+            name: "Abzu".to_string(),
+            platform: "epic".to_string(),
+        },
+    ];
+    let entries = loader::dedupe(games);
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["Zelda", "Abzu"]);
 }
 
 #[test]

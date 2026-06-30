@@ -13,8 +13,14 @@ fn test_write_and_read_cache() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.json");
     let games = vec![
-        Game { name: "Hollow Knight".to_string(), platform: "gog".to_string() },
-        Game { name: "Celeste".to_string(), platform: "epic".to_string() },
+        Game {
+            name: "Hollow Knight".to_string(),
+            platform: "gog".to_string(),
+        },
+        Game {
+            name: "Celeste".to_string(),
+            platform: "epic".to_string(),
+        },
     ];
     cache::write_cache(&path, &games, "test_source").unwrap();
     let data = cache::read_cache(&path).unwrap();
@@ -28,7 +34,10 @@ fn test_write_and_read_cache() {
 fn test_write_cache_creates_parent_dirs() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("nested").join("cache.json");
-    let games = vec![Game { name: "Test".to_string(), platform: "steam".to_string() }];
+    let games = vec![Game {
+        name: "Test".to_string(),
+        platform: "steam".to_string(),
+    }];
     cache::write_cache(&path, &games, "test").unwrap();
     assert!(path.exists());
 }
@@ -48,11 +57,13 @@ fn test_is_stale_with_fresh_timestamp() {
 fn test_cache_format_matches_python() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("test.json");
-    let games = vec![Game { name: "Half-Life".to_string(), platform: "steam".to_string() }];
+    let games = vec![Game {
+        name: "Half-Life".to_string(),
+        platform: "steam".to_string(),
+    }];
     cache::write_cache(&path, &games, "steam_api").unwrap();
-    let raw: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&path).unwrap()
-    ).unwrap();
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert!(raw["last_updated"].is_string());
     assert_eq!(raw["source"], "steam_api");
     assert_eq!(raw["games"][0]["name"], "Half-Life");

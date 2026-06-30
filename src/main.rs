@@ -5,7 +5,10 @@ use clap::{Parser, Subcommand};
 use backlog::{cache, config, loader, search, sources, sync};
 
 #[derive(Parser)]
-#[command(name = "backlog", about = "Search your game library across Steam, Epic, GOG, and Amazon")]
+#[command(
+    name = "backlog",
+    about = "Search your game library across Steam, Epic, GOG, and Amazon"
+)]
 struct Cli {
     /// Game name to search for (opens TUI if omitted)
     query: Option<String>,
@@ -62,7 +65,15 @@ fn run_search(query: &str) {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     for r in &matches {
-        writeln!(out, "{:<width$}  {}", r.game.name, r.game.platform, width = max_name_len).ok();
+        let platform_label = r.game.platforms.join(" / ");
+        writeln!(
+            out,
+            "{:<width$}  {}",
+            r.game.name,
+            platform_label,
+            width = max_name_len
+        )
+        .ok();
     }
 }
 
@@ -112,7 +123,10 @@ fn run_setup() {
         }
     };
 
-    let cfg = config::Config { steam_api_key: api_key, steam_id };
+    let cfg = config::Config {
+        steam_api_key: api_key,
+        steam_id,
+    };
     config::save_config(&config_path, &cfg).expect("Failed to save config");
     eprintln!("Config saved to {}", config_path.display());
 }
@@ -122,7 +136,9 @@ fn prompt(message: &str) -> String {
     eprint!("{message}");
     io::stderr().flush().ok();
     let mut input = String::new();
-    io::stdin().read_line(&mut input).expect("Failed to read input");
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read input");
     input.trim().to_string()
 }
 

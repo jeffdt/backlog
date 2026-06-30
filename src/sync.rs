@@ -1,10 +1,12 @@
 use std::path::Path;
 
+use crate::Game;
 use crate::cache;
 use crate::config;
 use crate::sources::heroic;
 use crate::sources::steam;
-use crate::Game;
+
+type HeroicSource = (&'static str, fn(&Path) -> Vec<Game>, &'static str);
 
 /// Status of a single sync operation.
 pub enum SyncStatus {
@@ -27,7 +29,7 @@ pub struct SyncReport {
 /// and the loader returns no games. If the file exists but is empty, the cache
 /// is still written (with zero entries).
 pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
-    let sources: Vec<(&str, fn(&Path) -> Vec<Game>, &str)> = vec![
+    let sources: Vec<HeroicSource> = vec![
         ("epic", heroic::load_epic, "legendary_library.json"),
         ("gog", heroic::load_gog, "gog_library.json"),
         ("amazon", heroic::load_amazon, "nile_library.json"),

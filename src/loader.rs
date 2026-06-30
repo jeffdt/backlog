@@ -1,23 +1,24 @@
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::path::Path;
 
-use crate::Game;
 use crate::cache;
+use crate::{Game, LibraryEntry};
 
 const PLATFORMS: &[&str] = &["epic", "gog", "amazon", "steam"];
 
 pub struct LoadResult {
-    pub games: Vec<Game>,
+    pub games: Vec<LibraryEntry>,
     pub warnings: Vec<String>,
     pub oldest_update: Option<DateTime<Utc>>,
 }
 
-/// Reads all platform caches from `cache_dir` and merges them into a single list.
+/// Reads all platform caches from `cache_dir` and merges them into a deduplicated list.
 ///
 /// Platforms without a cache file are silently skipped. Platforms with a stale
 /// cache (older than 7 days) produce a warning entry.
 pub fn load_all_games(cache_dir: &Path) -> LoadResult {
-    let mut games = Vec::new();
+    let mut raw_games = Vec::new();
     let mut warnings = Vec::new();
     let mut oldest_update: Option<DateTime<Utc>> = None;
 
@@ -41,10 +42,41 @@ pub fn load_all_games(cache_dir: &Path) -> LoadResult {
             ));
         }
 
-        games.extend(data.games);
+        raw_games.extend(data.games);
     }
 
-    LoadResult { games, warnings, oldest_update }
+    LoadResult {
+        games: dedupe(raw_games),
+        warnings,
+        oldest_update,
+    }
+}
+
+/// Deduplicates a flat list of games into library entries, merging cross-store duplicates.
+///
+/// Match key is `name.trim().to_lowercase()`. First-seen display casing is preserved.
+/// Platforms are listed in encounter order with duplicates removed.
+pub fn dedupe(games: Vec<Game>) -> Vec<LibraryEntry> {
+    let mut key_to_index: HashMap<String, usize> = HashMap::new();
+    let mut entries: Vec<LibraryEntry> = Vec::new();
+
+    for game in games {
+        let key = game.name.trim().to_lowercase();
+        if let Some(&idx) = key_to_index.get(&key) {
+            if !entries[idx].platforms.contains(&game.platform) {
+                entries[idx].platforms.push(game.platform);
+            }
+        } else {
+            let idx = entries.len();
+            key_to_index.insert(key, idx);
+            entries.push(LibraryEntry {
+                name: game.name,
+                platforms: vec![game.platform],
+            });
+        }
+    }
+
+    entries
 }
 
 /// Formats how long ago the library was last synced into a human-readable string.

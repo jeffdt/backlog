@@ -1,11 +1,11 @@
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use crate::Game;
+use crate::LibraryEntry;
 
-/// A game that matched a fuzzy search query, with its score and match positions.
+/// A library entry that matched a fuzzy search query, with its score and match positions.
 pub struct SearchResult<'a> {
-    pub game: &'a Game,
+    pub game: &'a LibraryEntry,
     pub score: u32,
     /// Character positions in `game.name` that matched the query, for TUI highlighting.
     pub match_indices: Vec<u32>,
@@ -14,8 +14,8 @@ pub struct SearchResult<'a> {
 /// Fuzzy-searches `library` using nucleo-matcher, returning matches sorted by score descending.
 ///
 /// Multi-word queries (e.g. "tomb raider") split into atoms that ALL must match.
-/// An empty query returns every game with score 0.
-pub fn fuzzy_search<'a>(query: &str, library: &'a [Game]) -> Vec<SearchResult<'a>> {
+/// An empty query returns every entry with score 0.
+pub fn fuzzy_search<'a>(query: &str, library: &'a [LibraryEntry]) -> Vec<SearchResult<'a>> {
     if library.is_empty() {
         return Vec::new();
     }
@@ -33,21 +33,21 @@ pub fn fuzzy_search<'a>(query: &str, library: &'a [Game]) -> Vec<SearchResult<'a
 
     let mut results: Vec<SearchResult<'a>> = library
         .iter()
-        .filter_map(|game| {
-            let haystack = Utf32Str::new(&game.name, &mut buf);
+        .filter_map(|entry| {
+            let haystack = Utf32Str::new(&entry.name, &mut buf);
             let score = pattern.score(haystack, &mut matcher)?;
             indices_buf.clear();
-            let haystack = Utf32Str::new(&game.name, &mut buf);
+            let haystack = Utf32Str::new(&entry.name, &mut buf);
             pattern.indices(haystack, &mut matcher, &mut indices_buf);
             Some(SearchResult {
-                game,
+                game: entry,
                 score,
                 match_indices: indices_buf.clone(),
             })
         })
         .collect();
 
-    results.sort_by(|a, b| b.score.cmp(&a.score));
+    results.sort_by_key(|r| std::cmp::Reverse(r.score));
 
     if let Some(best) = results.first() {
         let threshold = best.score * 3 / 5;

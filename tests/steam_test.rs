@@ -39,8 +39,7 @@ fn test_parse_steam_response_handles_missing_response() {
 
 #[test]
 fn test_parse_steam_response_handles_missing_games() {
-    let data: serde_json::Value =
-        serde_json::from_str(r#"{"response": {}}"#).unwrap();
+    let data: serde_json::Value = serde_json::from_str(r#"{"response": {}}"#).unwrap();
     let games = steam::parse_steam_response(&data);
     assert!(games.is_empty());
 }

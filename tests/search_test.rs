@@ -1,16 +1,43 @@
-use backlog::{Game, search};
+use backlog::{LibraryEntry, search};
 
-fn sample_library() -> Vec<Game> {
+fn sample_library() -> Vec<LibraryEntry> {
     vec![
-        Game { name: "Tomb Raider".to_string(), platform: "steam".to_string() },
-        Game { name: "Tomb Raider I".to_string(), platform: "steam".to_string() },
-        Game { name: "Tomb Raider II".to_string(), platform: "steam".to_string() },
-        Game { name: "Rise of the Tomb Raider".to_string(), platform: "epic".to_string() },
-        Game { name: "Celeste".to_string(), platform: "epic".to_string() },
-        Game { name: "Hollow Knight".to_string(), platform: "gog".to_string() },
-        Game { name: "TOEM".to_string(), platform: "epic".to_string() },
-        Game { name: "Braid".to_string(), platform: "gog".to_string() },
-        Game { name: "Hades".to_string(), platform: "epic".to_string() },
+        LibraryEntry {
+            name: "Tomb Raider".to_string(),
+            platforms: vec!["steam".to_string()],
+        },
+        LibraryEntry {
+            name: "Tomb Raider I".to_string(),
+            platforms: vec!["steam".to_string()],
+        },
+        LibraryEntry {
+            name: "Tomb Raider II".to_string(),
+            platforms: vec!["steam".to_string()],
+        },
+        LibraryEntry {
+            name: "Rise of the Tomb Raider".to_string(),
+            platforms: vec!["epic".to_string()],
+        },
+        LibraryEntry {
+            name: "Celeste".to_string(),
+            platforms: vec!["epic".to_string()],
+        },
+        LibraryEntry {
+            name: "Hollow Knight".to_string(),
+            platforms: vec!["gog".to_string()],
+        },
+        LibraryEntry {
+            name: "TOEM".to_string(),
+            platforms: vec!["epic".to_string()],
+        },
+        LibraryEntry {
+            name: "Braid".to_string(),
+            platforms: vec!["gog".to_string()],
+        },
+        LibraryEntry {
+            name: "Hades".to_string(),
+            platforms: vec!["epic".to_string()],
+        },
     ]
 }
 
@@ -84,4 +111,15 @@ fn test_match_indices_populated() {
     let results = search::fuzzy_search("celeste", &library);
     let celeste = results.iter().find(|r| r.game.name == "Celeste").unwrap();
     assert!(!celeste.match_indices.is_empty());
+}
+
+#[test]
+fn test_cross_store_dupe_yields_single_result() {
+    let library = vec![LibraryEntry {
+        name: "Card Shark".to_string(),
+        platforms: vec!["epic".to_string(), "steam".to_string()],
+    }];
+    let results = search::fuzzy_search("card shark", &library);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].game.platforms, vec!["epic", "steam"]);
 }
