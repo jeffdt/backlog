@@ -18,8 +18,10 @@ backlog setup
 ```
 
 The `setup` command prompts for your
-[Steam API key](https://steamcommunity.com/dev/apikey) and Steam ID, then
-stores them in `~/.config/backlog/config.json`.
+[Steam API key](https://steamcommunity.com/dev/apikey) and your Steam profile
+URL or vanity name (e.g. `https://steamcommunity.com/id/yourname` or just
+`yourname`). It resolves the vanity name to a Steam ID automatically and stores
+credentials in `~/.config/backlog/config.json`.
 
 ## Usage
 

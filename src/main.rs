@@ -96,7 +96,20 @@ fn run_setup() {
     eprintln!("  Get your API key at: https://steamcommunity.com/dev/apikey");
 
     let api_key = prompt("  Steam API key: ");
-    let steam_id = prompt("  Steam ID: ");
+    let input = prompt("  Steam profile URL or vanity name: ");
+
+    eprint!("  Resolving Steam ID...");
+    io::stderr().flush().ok();
+    let steam_id = match sources::steam::parse_steam_input(&api_key, &input) {
+        Ok(id) => {
+            eprintln!(" {id}");
+            id
+        }
+        Err(e) => {
+            eprintln!("\n  Error: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let cfg = config::Config { steam_api_key: api_key, steam_id };
     config::save_config(&config_path, &cfg).expect("Failed to save config");
