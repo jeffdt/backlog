@@ -127,7 +127,17 @@ fn prompt(message: &str) -> String {
 
 fn run_tui() {
     let cache_dir = cache::default_cache_dir();
-    if let Err(e) = backlog::tui::run(&cache_dir) {
+    let load_result = loader::load_all_games(&cache_dir);
+
+    let load_result = if load_result.games.is_empty() {
+        eprintln!("No cached games found, syncing...");
+        run_sync();
+        loader::load_all_games(&cache_dir)
+    } else {
+        load_result
+    };
+
+    if let Err(e) = backlog::tui::run_with(load_result) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }

@@ -39,13 +39,17 @@ impl App {
 /// Launches the interactive TUI, loading games from `cache_dir`.
 pub fn run(cache_dir: &Path) -> io::Result<()> {
     let load_result = loader::load_all_games(cache_dir);
+    run_with(load_result)
+}
 
+/// Launches the interactive TUI with a pre-loaded game list.
+pub fn run_with(load_result: LoadResult) -> io::Result<()> {
     for w in &load_result.warnings {
         eprintln!("Warning: {w}");
     }
 
     if load_result.games.is_empty() {
-        eprintln!("No games loaded. Run `backlog sync` first.");
+        eprintln!("No games loaded. Run `backlog setup` to configure, then `backlog sync`.");
         return Ok(());
     }
 
