@@ -107,6 +107,7 @@ fn run_setup() {
         }
         Err(e) => {
             eprintln!("\n  Error: {e}");
+            eprintln!("Setup failed, keeping existing config.");
             std::process::exit(1);
         }
     };
