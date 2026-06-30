@@ -1,0 +1,71 @@
+use backlog::{Game, cache, loader};
+use tempfile::TempDir;
+
+fn setup_caches(dir: &TempDir) {
+    let games_steam = vec![
+        Game { name: "Half-Life".to_string(), platform: "steam".to_string() },
+        Game { name: "Portal".to_string(), platform: "steam".to_string() },
+    ];
+    let games_epic = vec![
+        Game { name: "Celeste".to_string(), platform: "epic".to_string() },
+    ];
+    cache::write_cache(&dir.path().join("steam.json"), &games_steam, "steam_api").unwrap();
+    cache::write_cache(&dir.path().join("epic.json"), &games_epic, "heroic_cache").unwrap();
+}
+
+#[test]
+fn test_load_all_games_merges_platforms() {
+    let dir = TempDir::new().unwrap();
+    setup_caches(&dir);
+    let result = loader::load_all_games(dir.path());
+    assert_eq!(result.games.len(), 3);
+    assert!(result.warnings.is_empty());
+    assert!(result.oldest_update.is_some());
+}
+
+#[test]
+fn test_load_all_games_warns_on_stale() {
+    let dir = TempDir::new().unwrap();
+    let stale_json = r#"{
+        "last_updated": "2020-01-01T00:00:00+00:00",
+        "source": "steam_api",
+        "games": [{"name": "Old Game", "platform": "steam"}]
+    }"#;
+    std::fs::write(dir.path().join("steam.json"), stale_json).unwrap();
+    let result = loader::load_all_games(dir.path());
+    assert_eq!(result.games.len(), 1);
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("steam"));
+}
+
+#[test]
+fn test_load_all_games_empty_dir() {
+    let dir = TempDir::new().unwrap();
+    let result = loader::load_all_games(dir.path());
+    assert!(result.games.is_empty());
+    assert!(result.warnings.is_empty());
+    assert!(result.oldest_update.is_none());
+}
+
+#[test]
+fn test_format_sync_age_none() {
+    assert_eq!(loader::format_sync_age(None), "never synced");
+}
+
+#[test]
+fn test_format_sync_age_recent() {
+    let recent = chrono::Utc::now() - chrono::Duration::seconds(30);
+    assert_eq!(loader::format_sync_age(Some(recent)), "synced just now");
+}
+
+#[test]
+fn test_format_sync_age_hours() {
+    let hours_ago = chrono::Utc::now() - chrono::Duration::hours(3);
+    assert_eq!(loader::format_sync_age(Some(hours_ago)), "synced 3h ago");
+}
+
+#[test]
+fn test_format_sync_age_days() {
+    let days_ago = chrono::Utc::now() - chrono::Duration::days(5);
+    assert_eq!(loader::format_sync_age(Some(days_ago)), "synced 5d ago");
+}
