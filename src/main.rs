@@ -144,6 +144,8 @@ fn prompt(message: &str) -> String {
 
 fn run_tui() {
     let cache_dir = cache::default_cache_dir();
+    let heroic_dir = sources::heroic::heroic_store_cache_dir();
+    let config_path = config::default_config_path();
     let load_result = loader::load_all_games(&cache_dir);
 
     let load_result = if load_result.games.is_empty() {
@@ -154,7 +156,7 @@ fn run_tui() {
         load_result
     };
 
-    if let Err(e) = backlog::tui::run_with(load_result) {
+    if let Err(e) = backlog::tui::run_with(load_result, cache_dir, heroic_dir, config_path) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }

@@ -1,5 +1,7 @@
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -13,7 +15,14 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use crate::LibraryEntry;
 use crate::loader::{self, LoadResult};
 use crate::search;
+use crate::sync;
 use crate::sync::{SyncReport, SyncStatus};
+
+enum SyncState {
+    Idle,
+    Syncing,
+    Done(Vec<SyncReport>),
+}
 
 struct App {
     input: String,
@@ -22,10 +31,20 @@ struct App {
     selected: usize,
     sync_age: String,
     quit: bool,
+    sync_state: SyncState,
+    sync_rx: Option<mpsc::Receiver<Vec<SyncReport>>>,
+    cache_dir: PathBuf,
+    heroic_dir: PathBuf,
+    config_path: PathBuf,
 }
 
 impl App {
-    fn new(load_result: LoadResult) -> Self {
+    fn new(
+        load_result: LoadResult,
+        cache_dir: PathBuf,
+        heroic_dir: PathBuf,
+        config_path: PathBuf,
+    ) -> Self {
         let sync_age = loader::format_sync_age(load_result.oldest_update);
         Self {
             input: String::new(),
@@ -34,18 +53,66 @@ impl App {
             selected: 0,
             sync_age,
             quit: false,
+            sync_state: SyncState::Idle,
+            sync_rx: None,
+            cache_dir,
+            heroic_dir,
+            config_path,
         }
+    }
+
+    fn start_sync(&mut self) {
+        if matches!(self.sync_state, SyncState::Syncing) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let cache_dir = self.cache_dir.clone();
+        let heroic_dir = self.heroic_dir.clone();
+        let config_path = self.config_path.clone();
+        thread::spawn(move || {
+            let reports = sync::sync_all(&heroic_dir, &config_path, &cache_dir);
+            let _ = tx.send(reports);
+        });
+        self.sync_rx = Some(rx);
+        self.sync_state = SyncState::Syncing;
+    }
+
+    fn poll_sync(&mut self) {
+        let Some(rx) = &self.sync_rx else {
+            return;
+        };
+        let Ok(reports) = rx.try_recv() else {
+            return;
+        };
+        let load_result = loader::load_all_games(&self.cache_dir);
+        self.games = load_result.games;
+        self.sync_age = loader::format_sync_age(load_result.oldest_update);
+        self.selected = 0;
+        self.sync_state = SyncState::Done(reports);
+        self.sync_rx = None;
     }
 }
 
 /// Launches the interactive TUI, loading games from `cache_dir`.
 pub fn run(cache_dir: &Path) -> io::Result<()> {
     let load_result = loader::load_all_games(cache_dir);
-    run_with(load_result)
+    let heroic_dir = crate::sources::heroic::heroic_store_cache_dir();
+    let config_path = crate::config::default_config_path();
+    run_with(
+        load_result,
+        cache_dir.to_path_buf(),
+        heroic_dir,
+        config_path,
+    )
 }
 
 /// Launches the interactive TUI with a pre-loaded game list.
-pub fn run_with(load_result: LoadResult) -> io::Result<()> {
+pub fn run_with(
+    load_result: LoadResult,
+    cache_dir: PathBuf,
+    heroic_dir: PathBuf,
+    config_path: PathBuf,
+) -> io::Result<()> {
     for w in &load_result.warnings {
         eprintln!("Warning: {w}");
     }
@@ -68,7 +135,7 @@ pub fn run_with(load_result: LoadResult) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(load_result);
+    let mut app = App::new(load_result, cache_dir, heroic_dir, config_path);
     let result = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -82,55 +149,59 @@ const TICK_RATE: Duration = Duration::from_millis(100);
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
     loop {
+        app.poll_sync();
         terminal.draw(|f| draw(f, app))?;
 
         if app.quit {
             return Ok(());
         }
 
-        if event::poll(TICK_RATE)? {
-            if let Event::Key(key) = event::read()? {
-                match (key.code, key.modifiers) {
-                    (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                        app.quit = true;
-                    }
-                    (KeyCode::Char(c), _) => {
-                        app.input.insert(app.cursor_pos, c);
-                        app.cursor_pos += c.len_utf8();
-                        app.selected = 0;
-                    }
-                    (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
-                        let prev = app.input[..app.cursor_pos]
-                            .char_indices()
-                            .next_back()
-                            .map(|(i, _)| i)
-                            .unwrap_or(0);
-                        app.input.drain(prev..app.cursor_pos);
-                        app.cursor_pos = prev;
-                        app.selected = 0;
-                    }
-                    (KeyCode::Left, _) if app.cursor_pos > 0 => {
-                        app.cursor_pos = app.input[..app.cursor_pos]
-                            .char_indices()
-                            .next_back()
-                            .map(|(i, _)| i)
-                            .unwrap_or(0);
-                    }
-                    (KeyCode::Right, _) if app.cursor_pos < app.input.len() => {
-                        app.cursor_pos = app.input[app.cursor_pos..]
-                            .char_indices()
-                            .nth(1)
-                            .map(|(i, _)| app.cursor_pos + i)
-                            .unwrap_or(app.input.len());
-                    }
-                    (KeyCode::Down, _) => {
-                        app.selected = app.selected.saturating_add(1);
-                    }
-                    (KeyCode::Up, _) => {
-                        app.selected = app.selected.saturating_sub(1);
-                    }
-                    _ => {}
+        if event::poll(TICK_RATE)?
+            && let Event::Key(key) = event::read()?
+        {
+            match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    app.quit = true;
                 }
+                (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                    app.start_sync();
+                }
+                (KeyCode::Char(c), _) => {
+                    app.input.insert(app.cursor_pos, c);
+                    app.cursor_pos += c.len_utf8();
+                    app.selected = 0;
+                }
+                (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
+                    let prev = app.input[..app.cursor_pos]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    app.input.drain(prev..app.cursor_pos);
+                    app.cursor_pos = prev;
+                    app.selected = 0;
+                }
+                (KeyCode::Left, _) if app.cursor_pos > 0 => {
+                    app.cursor_pos = app.input[..app.cursor_pos]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+                (KeyCode::Right, _) if app.cursor_pos < app.input.len() => {
+                    app.cursor_pos = app.input[app.cursor_pos..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| app.cursor_pos + i)
+                        .unwrap_or(app.input.len());
+                }
+                (KeyCode::Down, _) => {
+                    app.selected = app.selected.saturating_add(1);
+                }
+                (KeyCode::Up, _) => {
+                    app.selected = app.selected.saturating_sub(1);
+                }
+                _ => {}
             }
         }
     }
@@ -185,6 +256,7 @@ fn draw(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(2), // search input + blank gap
             Constraint::Min(1),    // results
+            Constraint::Length(1), // sync status
         ])
         .split(inner);
 
@@ -198,6 +270,15 @@ fn draw(f: &mut Frame, app: &App) {
     let cursor_x = chunks[0].x + 2 + app.input[..app.cursor_pos].chars().count() as u16;
     let cursor_y = chunks[0].y;
     f.set_cursor_position((cursor_x, cursor_y));
+
+    let status_text = match &app.sync_state {
+        SyncState::Idle => String::new(),
+        SyncState::Syncing => "syncing...".to_string(),
+        SyncState::Done(reports) => format_sync_summary(reports),
+    };
+    let status_widget =
+        Paragraph::new(status_text.as_str()).style(Style::default().fg(Color::DarkGray));
+    f.render_widget(status_widget, chunks[2]);
 
     // Only show results when the user has typed something
     if app.input.is_empty() {
