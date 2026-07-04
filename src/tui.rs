@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use crate::LibraryEntry;
 use crate::loader::{self, LoadResult};
 use crate::search;
+use crate::sync::{SyncReport, SyncStatus};
 
 struct App {
     input: String,
@@ -138,6 +139,21 @@ fn platform_color(platform: &str) -> Color {
         "amazon" => Color::Yellow,
         _ => Color::Gray,
     }
+}
+
+fn format_sync_summary(reports: &[SyncReport]) -> String {
+    reports
+        .iter()
+        .map(|r| {
+            let value = match &r.status {
+                SyncStatus::Ok => format!("+{}", r.game_count),
+                SyncStatus::Skipped(_) => "skip".to_string(),
+                SyncStatus::Error(_) => "error".to_string(),
+            };
+            format!("{} {}", r.platform, value)
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 fn draw(f: &mut Frame, app: &App) {
@@ -273,5 +289,51 @@ fn draw(f: &mut Frame, app: &App) {
 
         let paragraph = Paragraph::new(Line::from(name_spans)).style(row_style);
         f.render_widget(paragraph, row_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::{SyncReport, SyncStatus};
+
+    fn ok(platform: &str, count: usize) -> SyncReport {
+        SyncReport {
+            platform: platform.to_string(),
+            game_count: count,
+            status: SyncStatus::Ok,
+        }
+    }
+
+    #[test]
+    fn all_ok_reports_show_plus_counts() {
+        let reports = vec![ok("steam", 42), ok("epic", 10)];
+        assert_eq!(format_sync_summary(&reports), "steam +42  epic +10");
+    }
+
+    #[test]
+    fn mixed_statuses_render_skip_and_error_words() {
+        let reports = vec![
+            ok("steam", 42),
+            SyncReport {
+                platform: "gog".to_string(),
+                game_count: 0,
+                status: SyncStatus::Skipped("gog_library.json not found".to_string()),
+            },
+            SyncReport {
+                platform: "amazon".to_string(),
+                game_count: 0,
+                status: SyncStatus::Error("network error".to_string()),
+            },
+        ];
+        assert_eq!(
+            format_sync_summary(&reports),
+            "steam +42  gog skip  amazon error"
+        );
+    }
+
+    #[test]
+    fn empty_reports_produce_empty_string() {
+        assert_eq!(format_sync_summary(&[]), "");
     }
 }
