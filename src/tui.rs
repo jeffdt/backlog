@@ -1,5 +1,9 @@
+use std::collections::HashMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
@@ -10,8 +14,21 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
 use crate::LibraryEntry;
+use crate::cache;
 use crate::loader::{self, LoadResult};
 use crate::search;
+use crate::sync;
+use crate::sync::{SyncReport, SyncStatus};
+
+/// Platform cache filenames written by `sync::sync_all`, used to snapshot
+/// per-platform counts before a sync so the status row can show a delta.
+const SYNCED_PLATFORMS: [&str; 4] = ["epic", "gog", "amazon", "steam"];
+
+enum SyncState {
+    Idle,
+    Syncing,
+    Done(Vec<SyncReport>),
+}
 
 struct App {
     input: String,
@@ -20,10 +37,21 @@ struct App {
     selected: usize,
     sync_age: String,
     quit: bool,
+    sync_state: SyncState,
+    sync_rx: Option<mpsc::Receiver<Vec<SyncReport>>>,
+    sync_before_counts: HashMap<String, usize>,
+    cache_dir: PathBuf,
+    heroic_dir: PathBuf,
+    config_path: PathBuf,
 }
 
 impl App {
-    fn new(load_result: LoadResult) -> Self {
+    fn new(
+        load_result: LoadResult,
+        cache_dir: PathBuf,
+        heroic_dir: PathBuf,
+        config_path: PathBuf,
+    ) -> Self {
         let sync_age = loader::format_sync_age(load_result.oldest_update);
         Self {
             input: String::new(),
@@ -32,18 +60,76 @@ impl App {
             selected: 0,
             sync_age,
             quit: false,
+            sync_state: SyncState::Idle,
+            sync_rx: None,
+            sync_before_counts: HashMap::new(),
+            cache_dir,
+            heroic_dir,
+            config_path,
         }
+    }
+
+    fn start_sync(&mut self) {
+        if matches!(self.sync_state, SyncState::Syncing) {
+            return;
+        }
+        self.sync_before_counts = SYNCED_PLATFORMS
+            .iter()
+            .map(|platform| {
+                let count = cache::read_cache(&self.cache_dir.join(format!("{platform}.json")))
+                    .map(|c| c.games.len())
+                    .unwrap_or(0);
+                (platform.to_string(), count)
+            })
+            .collect();
+        let (tx, rx) = mpsc::channel();
+        let cache_dir = self.cache_dir.clone();
+        let heroic_dir = self.heroic_dir.clone();
+        let config_path = self.config_path.clone();
+        thread::spawn(move || {
+            let reports = sync::sync_all(&heroic_dir, &config_path, &cache_dir);
+            let _ = tx.send(reports);
+        });
+        self.sync_rx = Some(rx);
+        self.sync_state = SyncState::Syncing;
+    }
+
+    fn poll_sync(&mut self) {
+        let Some(rx) = &self.sync_rx else {
+            return;
+        };
+        let Ok(reports) = rx.try_recv() else {
+            return;
+        };
+        let load_result = loader::load_all_games(&self.cache_dir);
+        self.games = load_result.games;
+        self.sync_age = loader::format_sync_age(load_result.oldest_update);
+        self.selected = 0;
+        self.sync_state = SyncState::Done(reports);
+        self.sync_rx = None;
     }
 }
 
 /// Launches the interactive TUI, loading games from `cache_dir`.
 pub fn run(cache_dir: &Path) -> io::Result<()> {
     let load_result = loader::load_all_games(cache_dir);
-    run_with(load_result)
+    let heroic_dir = crate::sources::heroic::heroic_store_cache_dir();
+    let config_path = crate::config::default_config_path();
+    run_with(
+        load_result,
+        cache_dir.to_path_buf(),
+        heroic_dir,
+        config_path,
+    )
 }
 
 /// Launches the interactive TUI with a pre-loaded game list.
-pub fn run_with(load_result: LoadResult) -> io::Result<()> {
+pub fn run_with(
+    load_result: LoadResult,
+    cache_dir: PathBuf,
+    heroic_dir: PathBuf,
+    config_path: PathBuf,
+) -> io::Result<()> {
     for w in &load_result.warnings {
         eprintln!("Warning: {w}");
     }
@@ -66,7 +152,7 @@ pub fn run_with(load_result: LoadResult) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(load_result);
+    let mut app = App::new(load_result, cache_dir, heroic_dir, config_path);
     let result = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -76,18 +162,26 @@ pub fn run_with(load_result: LoadResult) -> io::Result<()> {
     result
 }
 
+const TICK_RATE: Duration = Duration::from_millis(100);
+
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
     loop {
+        app.poll_sync();
         terminal.draw(|f| draw(f, app))?;
 
         if app.quit {
             return Ok(());
         }
 
-        if let Event::Key(key) = event::read()? {
+        if event::poll(TICK_RATE)?
+            && let Event::Key(key) = event::read()?
+        {
             match (key.code, key.modifiers) {
                 (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     app.quit = true;
+                }
+                (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                    app.start_sync();
                 }
                 (KeyCode::Char(c), _) => {
                     app.input.insert(app.cursor_pos, c);
@@ -140,6 +234,29 @@ fn platform_color(platform: &str) -> Color {
     }
 }
 
+fn format_sync_summary(reports: &[SyncReport], before_counts: &HashMap<String, usize>) -> String {
+    reports
+        .iter()
+        .map(|r| {
+            let value = match &r.status {
+                SyncStatus::Ok => {
+                    let before = before_counts.get(&r.platform).copied().unwrap_or(0);
+                    let delta = r.game_count as i64 - before as i64;
+                    if delta >= 0 {
+                        format!("+{delta}")
+                    } else {
+                        format!("{delta}")
+                    }
+                }
+                SyncStatus::Skipped(_) => "skip".to_string(),
+                SyncStatus::Error(_) => "error".to_string(),
+            };
+            format!("{} {}", r.platform, value)
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
 fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
 
@@ -164,6 +281,7 @@ fn draw(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(2), // search input + blank gap
             Constraint::Min(1),    // results
+            Constraint::Length(1), // sync status
         ])
         .split(inner);
 
@@ -177,6 +295,15 @@ fn draw(f: &mut Frame, app: &App) {
     let cursor_x = chunks[0].x + 2 + app.input[..app.cursor_pos].chars().count() as u16;
     let cursor_y = chunks[0].y;
     f.set_cursor_position((cursor_x, cursor_y));
+
+    let status_text = match &app.sync_state {
+        SyncState::Idle => String::new(),
+        SyncState::Syncing => "syncing...".to_string(),
+        SyncState::Done(reports) => format_sync_summary(reports, &app.sync_before_counts),
+    };
+    let status_widget =
+        Paragraph::new(status_text.as_str()).style(Style::default().fg(Color::DarkGray));
+    f.render_widget(status_widget, chunks[2]);
 
     // Only show results when the user has typed something
     if app.input.is_empty() {
@@ -273,5 +400,70 @@ fn draw(f: &mut Frame, app: &App) {
 
         let paragraph = Paragraph::new(Line::from(name_spans)).style(row_style);
         f.render_widget(paragraph, row_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::{SyncReport, SyncStatus};
+
+    fn ok(platform: &str, count: usize) -> SyncReport {
+        SyncReport {
+            platform: platform.to_string(),
+            game_count: count,
+            status: SyncStatus::Ok,
+        }
+    }
+
+    #[test]
+    fn ok_reports_show_full_count_as_delta_when_no_prior_snapshot() {
+        let reports = vec![ok("steam", 42), ok("epic", 10)];
+        let before = HashMap::new();
+        assert_eq!(
+            format_sync_summary(&reports, &before),
+            "steam +42  epic +10"
+        );
+    }
+
+    #[test]
+    fn ok_reports_show_delta_from_before_counts() {
+        let reports = vec![ok("steam", 42), ok("epic", 10)];
+        let before = HashMap::from([("steam".to_string(), 39), ("epic".to_string(), 10)]);
+        assert_eq!(format_sync_summary(&reports, &before), "steam +3  epic +0");
+    }
+
+    #[test]
+    fn ok_report_shows_negative_delta_when_games_removed() {
+        let reports = vec![ok("steam", 40)];
+        let before = HashMap::from([("steam".to_string(), 42)]);
+        assert_eq!(format_sync_summary(&reports, &before), "steam -2");
+    }
+
+    #[test]
+    fn mixed_statuses_render_skip_and_error_words() {
+        let reports = vec![
+            ok("steam", 42),
+            SyncReport {
+                platform: "gog".to_string(),
+                game_count: 0,
+                status: SyncStatus::Skipped("gog_library.json not found".to_string()),
+            },
+            SyncReport {
+                platform: "amazon".to_string(),
+                game_count: 0,
+                status: SyncStatus::Error("network error".to_string()),
+            },
+        ];
+        let before = HashMap::new();
+        assert_eq!(
+            format_sync_summary(&reports, &before),
+            "steam +42  gog skip  amazon error"
+        );
+    }
+
+    #[test]
+    fn empty_reports_produce_empty_string() {
+        assert_eq!(format_sync_summary(&[], &HashMap::new()), "");
     }
 }
