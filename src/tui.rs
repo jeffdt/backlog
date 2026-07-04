@@ -1,5 +1,6 @@
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
@@ -77,6 +78,8 @@ pub fn run_with(load_result: LoadResult) -> io::Result<()> {
     result
 }
 
+const TICK_RATE: Duration = Duration::from_millis(100);
+
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
     loop {
         terminal.draw(|f| draw(f, app))?;
@@ -85,47 +88,49 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
             return Ok(());
         }
 
-        if let Event::Key(key) = event::read()? {
-            match (key.code, key.modifiers) {
-                (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                    app.quit = true;
+        if event::poll(TICK_RATE)? {
+            if let Event::Key(key) = event::read()? {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                        app.quit = true;
+                    }
+                    (KeyCode::Char(c), _) => {
+                        app.input.insert(app.cursor_pos, c);
+                        app.cursor_pos += c.len_utf8();
+                        app.selected = 0;
+                    }
+                    (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
+                        let prev = app.input[..app.cursor_pos]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        app.input.drain(prev..app.cursor_pos);
+                        app.cursor_pos = prev;
+                        app.selected = 0;
+                    }
+                    (KeyCode::Left, _) if app.cursor_pos > 0 => {
+                        app.cursor_pos = app.input[..app.cursor_pos]
+                            .char_indices()
+                            .next_back()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                    }
+                    (KeyCode::Right, _) if app.cursor_pos < app.input.len() => {
+                        app.cursor_pos = app.input[app.cursor_pos..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| app.cursor_pos + i)
+                            .unwrap_or(app.input.len());
+                    }
+                    (KeyCode::Down, _) => {
+                        app.selected = app.selected.saturating_add(1);
+                    }
+                    (KeyCode::Up, _) => {
+                        app.selected = app.selected.saturating_sub(1);
+                    }
+                    _ => {}
                 }
-                (KeyCode::Char(c), _) => {
-                    app.input.insert(app.cursor_pos, c);
-                    app.cursor_pos += c.len_utf8();
-                    app.selected = 0;
-                }
-                (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
-                    let prev = app.input[..app.cursor_pos]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    app.input.drain(prev..app.cursor_pos);
-                    app.cursor_pos = prev;
-                    app.selected = 0;
-                }
-                (KeyCode::Left, _) if app.cursor_pos > 0 => {
-                    app.cursor_pos = app.input[..app.cursor_pos]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                }
-                (KeyCode::Right, _) if app.cursor_pos < app.input.len() => {
-                    app.cursor_pos = app.input[app.cursor_pos..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| app.cursor_pos + i)
-                        .unwrap_or(app.input.len());
-                }
-                (KeyCode::Down, _) => {
-                    app.selected = app.selected.saturating_add(1);
-                }
-                (KeyCode::Up, _) => {
-                    app.selected = app.selected.saturating_sub(1);
-                }
-                _ => {}
             }
         }
     }
