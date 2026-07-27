@@ -1,3 +1,10 @@
 /target
 .superpowers/
 config.json
+/plans
+/specs
+/.claude/worktrees
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+*.local.md
+/examples/mockup.rs
