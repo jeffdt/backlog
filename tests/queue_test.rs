@@ -1,3 +1,5 @@
+use backlog::LibraryEntry;
+use backlog::queue::Filter;
 use backlog::queue::{self, GameState, Queue, QueueEntry};
 use tempfile::TempDir;
 
@@ -209,4 +211,78 @@ fn moves_skip_over_played_only_entries() {
     q.toggle_queued("Outer Wilds");
     assert!(q.move_down("Disco Elysium"));
     assert_eq!(q.queued_names(), vec!["Outer Wilds", "Disco Elysium"]);
+}
+
+fn library(names: &[&str]) -> Vec<LibraryEntry> {
+    names
+        .iter()
+        .map(|n| LibraryEntry {
+            name: n.to_string(),
+            platforms: vec!["steam".to_string()],
+        })
+        .collect()
+}
+
+fn names(entries: &[LibraryEntry]) -> Vec<&str> {
+    entries.iter().map(|e| e.name.as_str()).collect()
+}
+
+#[test]
+fn filter_cycles_forward_and_backward() {
+    assert_eq!(Filter::All.next(), Filter::Queued);
+    assert_eq!(Filter::Queued.next(), Filter::Played);
+    assert_eq!(Filter::Played.next(), Filter::Unplayed);
+    assert_eq!(Filter::Unplayed.next(), Filter::All);
+
+    assert_eq!(Filter::All.prev(), Filter::Unplayed);
+    assert_eq!(Filter::Unplayed.prev(), Filter::Played);
+    assert_eq!(Filter::Queued.prev(), Filter::All);
+}
+
+#[test]
+fn filter_all_returns_the_whole_library_in_order() {
+    let lib = library(&["Tunic", "Outer Wilds", "Pentiment"]);
+    let q = Queue::default();
+    let out = queue::apply_filter(&lib, &q, Filter::All);
+    assert_eq!(names(&out), vec!["Tunic", "Outer Wilds", "Pentiment"]);
+}
+
+#[test]
+fn filter_queued_returns_games_in_rank_order_not_library_order() {
+    let lib = library(&["Tunic", "Outer Wilds", "Pentiment"]);
+    let mut q = Queue::default();
+    q.toggle_queued("Pentiment");
+    q.toggle_queued("Tunic");
+    let out = queue::apply_filter(&lib, &q, Filter::Queued);
+    assert_eq!(names(&out), vec!["Pentiment", "Tunic"]);
+}
+
+#[test]
+fn filter_queued_skips_games_missing_from_the_library() {
+    let lib = library(&["Tunic"]);
+    let mut q = Queue::default();
+    q.toggle_queued("Uninstalled Game");
+    q.toggle_queued("Tunic");
+    let out = queue::apply_filter(&lib, &q, Filter::Queued);
+    assert_eq!(names(&out), vec!["Tunic"]);
+}
+
+#[test]
+fn filter_played_returns_only_played_games_in_library_order() {
+    let lib = library(&["Tunic", "Outer Wilds", "Pentiment"]);
+    let mut q = Queue::default();
+    q.toggle_played("Pentiment");
+    q.toggle_played("Tunic");
+    let out = queue::apply_filter(&lib, &q, Filter::Played);
+    assert_eq!(names(&out), vec!["Tunic", "Pentiment"]);
+}
+
+#[test]
+fn filter_unplayed_includes_queued_but_unplayed_games() {
+    let lib = library(&["Tunic", "Outer Wilds", "Pentiment"]);
+    let mut q = Queue::default();
+    q.toggle_played("Pentiment");
+    q.toggle_queued("Tunic");
+    let out = queue::apply_filter(&lib, &q, Filter::Unplayed);
+    assert_eq!(names(&out), vec!["Tunic", "Outer Wilds"]);
 }

@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::LibraryEntry;
+
 /// Schema version written into the queue file.
 pub const QUEUE_VERSION: u32 = 1;
 
@@ -206,5 +208,90 @@ impl Queue {
         };
         self.entries.swap(idx, neighbor);
         true
+    }
+}
+
+/// Which slice of the library to show, cycled with Tab / Shift+Tab.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    Queued,
+    Played,
+    Unplayed,
+}
+
+impl Filter {
+    /// The next filter in the Tab cycle.
+    pub fn next(self) -> Self {
+        match self {
+            Filter::All => Filter::Queued,
+            Filter::Queued => Filter::Played,
+            Filter::Played => Filter::Unplayed,
+            Filter::Unplayed => Filter::All,
+        }
+    }
+
+    /// The previous filter in the cycle, reached with Shift+Tab.
+    pub fn prev(self) -> Self {
+        match self {
+            Filter::All => Filter::Unplayed,
+            Filter::Queued => Filter::All,
+            Filter::Played => Filter::Queued,
+            Filter::Unplayed => Filter::Played,
+        }
+    }
+
+    /// The word shown in the status-row chip.
+    pub fn label(self) -> &'static str {
+        match self {
+            Filter::All => "all",
+            Filter::Queued => "queued",
+            Filter::Played => "played",
+            Filter::Unplayed => "unplayed",
+        }
+    }
+
+    /// The row glyph this filter selects for, repeated in its chip so cycling
+    /// teaches the marker vocabulary. `Unplayed` has none: there is no glyph
+    /// for an absence.
+    pub fn glyph(self) -> Option<char> {
+        match self {
+            Filter::Queued => Some(QUEUED_GLYPH),
+            Filter::Played => Some(PLAYED_GLYPH),
+            Filter::All | Filter::Unplayed => None,
+        }
+    }
+}
+
+/// Marker shown against a queued game.
+pub const QUEUED_GLYPH: char = '»';
+/// Marker shown against a played game.
+pub const PLAYED_GLYPH: char = '✓';
+
+/// Narrows `library` to the games matching `filter`.
+///
+/// `Queued` returns games in rank order and skips queued games that are no
+/// longer in the library; every other filter preserves library order.
+pub fn apply_filter(library: &[LibraryEntry], queue: &Queue, filter: Filter) -> Vec<LibraryEntry> {
+    match filter {
+        Filter::All => library.to_vec(),
+        Filter::Queued => queue
+            .entries
+            .iter()
+            .filter(|e| e.queued)
+            .filter_map(|e| library.iter().find(|g| normalize_key(&g.name) == e.key))
+            .cloned()
+            .collect(),
+        Filter::Played => library
+            .iter()
+            .filter(|g| queue.state(&g.name).played)
+            .cloned()
+            .collect(),
+        Filter::Unplayed => library
+            .iter()
+            .filter(|g| !queue.state(&g.name).played)
+            .cloned()
+            .collect(),
     }
 }
