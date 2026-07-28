@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use clap::{Parser, Subcommand};
 
-use backlog::{cache, config, loader, search, sources, sync};
+use backlog::{cache, config, loader, output, queue, search, sources, sync};
 
 #[derive(Parser)]
 #[command(
@@ -23,6 +23,8 @@ enum Commands {
     Sync,
     /// Configure Steam API credentials
     Setup,
+    /// Print the ranked queue
+    Queue,
 }
 
 fn main() {
@@ -31,6 +33,7 @@ fn main() {
     match cli.command {
         Some(Commands::Setup) => run_setup(),
         Some(Commands::Sync) => run_sync(),
+        Some(Commands::Queue) => run_queue(),
         None => {
             if let Some(query) = cli.query {
                 run_search(&query);
@@ -61,20 +64,21 @@ fn run_search(query: &str) {
         return;
     }
 
-    let max_name_len = matches.iter().map(|r| r.game.name.len()).max().unwrap_or(0);
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    for r in &matches {
-        let platform_label = r.game.platforms.join(" / ");
-        writeln!(
-            out,
-            "{:<width$}  {}",
-            r.game.name,
-            platform_label,
-            width = max_name_len
-        )
-        .ok();
+    let q = queue::load(&queue::default_queue_path());
+    println!("{}", output::format_search_rows(&matches, &q));
+}
+
+fn run_queue() {
+    let cache_dir = cache::default_cache_dir();
+    let result = loader::load_all_games(&cache_dir);
+    let q = queue::load(&queue::default_queue_path());
+    let rows = output::format_queue_rows(&result.games, &q);
+
+    if rows.is_empty() {
+        eprintln!("Queue is empty. Press Enter on a game in the TUI to queue it.");
+        return;
     }
+    println!("{rows}");
 }
 
 fn run_sync() {
