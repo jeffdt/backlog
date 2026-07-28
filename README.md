@@ -2,7 +2,7 @@
 
 Fuzzy-search your game library across Steam, Epic, GOG, and Amazon from the
 terminal. Type a few letters and it finds the game, no matter which launcher
-owns it.
+owns it, then queue up what you mean to play next.
 
 ![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust&logoColor=white)
 ![TUI](https://img.shields.io/badge/TUI-ratatui-1f6feb)
@@ -37,6 +37,9 @@ backlog queue
 
 # Interactive TUI
 backlog
+
+# Print the installed version
+backlog --version
 ```
 
 ## Sources

@@ -7,11 +7,17 @@ use backlog::{cache, config, loader, output, queue, search, sources, sync};
 #[derive(Parser)]
 #[command(
     name = "backlog",
-    about = "Search your game library across Steam, Epic, GOG, and Amazon"
+    about = "Search and queue your game library across Steam, Epic, GOG, and Amazon"
 )]
 struct Cli {
     /// Game name to search for (opens TUI if omitted)
     query: Option<String>,
+
+    // Declared by hand rather than via `#[command(version)]`, which always
+    // prefixes its output with the binary name.
+    /// Print version and exit
+    #[arg(short = 'V', long)]
+    version: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -29,6 +35,11 @@ enum Commands {
 
 fn main() {
     let cli = Cli::parse();
+
+    if cli.version {
+        writeln!(io::stdout(), "{}", env!("CARGO_PKG_VERSION")).ok();
+        return;
+    }
 
     match cli.command {
         Some(Commands::Setup) => run_setup(),

@@ -8,3 +8,4 @@ config.json
 /.claude/scheduled_tasks.lock
 *.local.md
 /examples/mockup.rs
+/.claude/.claude
