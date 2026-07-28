@@ -25,9 +25,10 @@ cargo test test_oneshot_output   # run tests matching a name substring
 cargo clippy --all-targets       # lint
 cargo fmt                        # format
 
-cargo run -- search "hollow knight"   # one-shot search
+cargo run -- "hollow knight"          # one-shot search
 cargo run -- sync                     # refresh all caches
 cargo run -- setup                    # configure Steam credentials
+cargo run -- queue                    # print the ranked queue
 cargo run                             # launch interactive TUI
 cargo install --path .                # install the `backlog` binary
 ```
@@ -67,6 +68,11 @@ Each source converts an external format into `Vec<Game>`. Two kinds:
   are silently skipped, never panic.
 - Config lives at `~/.config/backlog/config.json` (`steam_api_key`,
   `steam_id`).
+- Queue state lives at `~/.local/share/backlog/queue.json` (schema
+  `version` 1). Entry array order is the queue rank. Writes are atomic
+  (temp file plus rename) and happen synchronously on every mutation,
+  since unlike a platform cache the queue can't be regenerated from an
+  upstream source. A missing or malformed file yields an empty queue.
 - Both modules resolve paths from `$HOME`, falling back to `.` when unset —
   this fallback is what makes them testable with `tempfile`.
 
@@ -75,6 +81,20 @@ Uses `nucleo-matcher`. Multi-word queries split into atoms that must all
 match. Results sort by score descending, then a relative threshold
 (`best * 3/5`) prunes weak matches. `match_indices` are returned for TUI
 highlighting.
+
+### Queue (`queue.rs`, `output.rs`)
+`queue.rs` tracks two independent per-game flags, `queued` and `played`
+(deliberately not mutually exclusive: a game you finished and want to
+replay again is both), keyed by `normalize_key(name)`, the same
+`name.trim().to_lowercase()` key `loader::dedupe` uses, so state survives
+re-syncs and casing changes. Entry order in the persisted queue is the
+rank; there is no separate rank field. It also defines
+`Filter::{All, Queued, Played, Unplayed}` and `apply_filter`. Queue state
+is deliberately decoupled from `loader` and `search`, which have no
+knowledge of it: the TUI and CLI look up state by key at render time.
+`output.rs` formats the plain-text CLI rows (search results and the ranked
+queue listing) that carry those markers, deliberately uncolored so piped
+output stays clean.
 
 ### TUI (`tui.rs`)
 `ratatui` + `crossterm`. `run_with(LoadResult)` is the entry point used by
@@ -100,9 +120,8 @@ exists). Shows live fuzzy results as the user types, plus a human-readable
 - **Named ANSI colors only.** Use the 16 named terminal colors (e.g.
   `Color::Cyan`, `Color::DarkGray`, `Color::White`), never `Color::Rgb`. This
   is what lets the TUI inherit the user's terminal theme rather than
-  imposing fixed colors. `tui.rs:398`'s `Color::Rgb(30, 30, 30)`
-  zebra-stripe background is a known existing violation, tracked as its own
-  follow-up rather than fixed here.
+  imposing fixed colors, which matters more than ever now that the queue
+  markers depend on theme inheritance too.
 
 ## Working in this repo
 

@@ -27,10 +27,13 @@ credentials in `~/.config/backlog/config.json`.
 
 ```sh
 # One-shot search
-backlog search "hollow knight"
+backlog "hollow knight"
 
 # Sync library caches from all sources
 backlog sync
+
+# Print your ranked queue
+backlog queue
 
 # Interactive TUI
 backlog
@@ -40,3 +43,18 @@ backlog
 
 - **Steam** via the Web API (requires API key)
 - **Epic / GOG / Amazon** via Heroic launcher's local library files
+
+## Queue
+
+Mark games as queued (want to play soon) or played from the TUI, then
+filter and reorder the list. Queue state lives in
+`~/.local/share/backlog/queue.json`.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Toggle queued on the selected game |
+| `Ctrl+P` | Toggle played on the selected game |
+| `Tab` / `Shift+Tab` | Cycle filter: all, queued, played, unplayed |
+| `Ctrl+J` / `Ctrl+K` (or `Shift+↓` / `Shift+↑`) | Move the selected game down / up in rank (queued filter only) |
+| `Ctrl+R` | Force-sync libraries |
+| `Esc` | Quit |
