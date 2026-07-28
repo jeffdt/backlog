@@ -45,8 +45,6 @@ struct App {
     heroic_dir: PathBuf,
     config_path: PathBuf,
     queue: crate::queue::Queue,
-    /// Consumed by the key handler that saves queue edits, added in a later task.
-    #[allow(dead_code)]
     queue_path: PathBuf,
     filter: crate::queue::Filter,
 }
@@ -122,6 +120,71 @@ impl App {
         self.selected = 0;
         self.sync_state = SyncState::Done(reports);
         self.sync_rx = None;
+    }
+
+    /// The game under the cursor, resolved against the currently visible rows.
+    fn selected_game(&self) -> Option<String> {
+        let filtered = self.filtered();
+        let results = search::fuzzy_search(&self.input, &filtered);
+        let selected = self.selected.min(results.len().saturating_sub(1));
+        results.get(selected).map(|r| r.game.name.clone())
+    }
+
+    /// Persists the queue, surfacing a write failure in the status row rather
+    /// than tearing down the terminal.
+    fn persist_queue(&mut self) {
+        if let Err(e) = crate::queue::save(&self.queue_path, &self.queue) {
+            self.sync_state = SyncState::Done(vec![SyncReport {
+                platform: "queue".to_string(),
+                game_count: 0,
+                status: SyncStatus::Error(e.to_string()),
+            }]);
+        }
+    }
+
+    fn toggle_queued(&mut self) {
+        let Some(name) = self.selected_game() else {
+            return;
+        };
+        self.queue.toggle_queued(&name);
+        self.persist_queue();
+    }
+
+    fn toggle_played(&mut self) {
+        let Some(name) = self.selected_game() else {
+            return;
+        };
+        self.queue.toggle_played(&name);
+        self.persist_queue();
+    }
+
+    /// Moves the selected game one rank, keeping the cursor on it.
+    ///
+    /// Only meaningful under the queued filter. With a search active, rows are
+    /// score-ordered rather than rank-ordered, so the cursor stays put.
+    fn move_selected(&mut self, down: bool) {
+        if self.filter != crate::queue::Filter::Queued {
+            return;
+        }
+        let Some(name) = self.selected_game() else {
+            return;
+        };
+        let moved = if down {
+            self.queue.move_down(&name)
+        } else {
+            self.queue.move_up(&name)
+        };
+        if !moved {
+            return;
+        }
+        if self.input.is_empty() {
+            self.selected = if down {
+                self.selected.saturating_add(1)
+            } else {
+                self.selected.saturating_sub(1)
+            };
+        }
+        self.persist_queue();
     }
 }
 
@@ -208,6 +271,24 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
                 (KeyCode::Tab, _) => {
                     app.filter = app.filter.next();
                     app.selected = 0;
+                }
+                (KeyCode::Enter, _) => {
+                    app.toggle_queued();
+                }
+                (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                    app.toggle_played();
+                }
+                (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+                    app.move_selected(true);
+                }
+                (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+                    app.move_selected(false);
+                }
+                (KeyCode::Down, KeyModifiers::SHIFT) => {
+                    app.move_selected(true);
+                }
+                (KeyCode::Up, KeyModifiers::SHIFT) => {
+                    app.move_selected(false);
                 }
                 (KeyCode::Char(c), _) => {
                     app.input.insert(app.cursor_pos, c);
