@@ -1,0 +1,321 @@
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::LibraryEntry;
+
+/// Schema version written into the queue file.
+pub const QUEUE_VERSION: u32 = 1;
+
+/// Per-game queue state, stored in the order that defines queue rank.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueEntry {
+    /// Normalized match key, produced by `normalize_key`.
+    pub key: String,
+    /// Display name as first seen, kept so the file is readable on its own.
+    pub name: String,
+    /// Whether the game is in the ranked queue. Independent of `played`.
+    pub queued: bool,
+    /// Whether the game has been played. Independent of `queued`.
+    pub played: bool,
+}
+
+/// The full set of per-game queue state, persisted as one JSON file.
+///
+/// Entry order is the queue rank: a game's rank is its 1-based position among
+/// the entries with `queued == true`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Queue {
+    pub version: u32,
+    pub entries: Vec<QueueEntry>,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            version: QUEUE_VERSION,
+            entries: Vec::new(),
+        }
+    }
+}
+
+/// Queue flags for a single game.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GameState {
+    pub queued: bool,
+    pub played: bool,
+}
+
+/// Normalizes a game name into the match key used to look up queue state.
+///
+/// Matches `loader::dedupe`'s key so state survives re-syncs and casing changes.
+pub fn normalize_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Returns the default queue file path: `~/.local/share/backlog/queue.json`.
+pub fn default_queue_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".local")
+        .join("share")
+        .join("backlog")
+        .join("queue.json")
+}
+
+/// Reads the queue from disk.
+///
+/// Only a genuinely absent file yields an empty queue. Anything else (an
+/// unreadable file, unparseable JSON, or a `version` newer than this build
+/// understands) is an error whose text is meant to be shown to the user, so
+/// that a file we could not understand is never silently overwritten.
+pub fn load(path: &Path) -> Result<Queue, String> {
+    // The reason leads and the path trails: this text lands in a one-line
+    // status row that clips, and the reason is the part worth keeping.
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Queue::default()),
+        Err(e) => return Err(format!("cannot read queue file: {e} ({})", path.display())),
+    };
+    let queue: Queue = serde_json::from_str(&contents)
+        .map_err(|e| format!("cannot parse queue file: {e} ({})", path.display()))?;
+    if queue.version > QUEUE_VERSION {
+        return Err(format!(
+            "queue file is schema version {} but this backlog only understands \
+             {QUEUE_VERSION}; refusing to overwrite {}",
+            queue.version,
+            path.display()
+        ));
+    }
+    Ok(queue)
+}
+
+/// Writes the queue to disk, dropping entries whose flags are all cleared.
+///
+/// Written atomically (temp file plus rename) because, unlike a platform cache,
+/// this file cannot be regenerated from an upstream source.
+pub fn save(path: &Path, queue: &Queue) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let pruned = Queue {
+        version: QUEUE_VERSION,
+        entries: queue
+            .entries
+            .iter()
+            .filter(|e| e.queued || e.played)
+            .cloned()
+            .collect(),
+    };
+    let json = serde_json::to_string_pretty(&pruned).map_err(io::Error::other)?;
+    let temp = path.with_extension("json.tmp");
+    let written = std::fs::write(&temp, json).and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
+}
+
+impl Queue {
+    /// Returns the queue flags for `name`, defaulting to all-false when absent.
+    pub fn state(&self, name: &str) -> GameState {
+        let key = normalize_key(name);
+        self.entries
+            .iter()
+            .find(|e| e.key == key)
+            .map(|e| GameState {
+                queued: e.queued,
+                played: e.played,
+            })
+            .unwrap_or_default()
+    }
+
+    fn index_of(&self, key: &str) -> Option<usize> {
+        self.entries.iter().position(|e| e.key == key)
+    }
+
+    /// Toggles the queued flag, appending newly queued games to the end of the
+    /// queue so they take the last rank.
+    pub fn toggle_queued(&mut self, name: &str) {
+        let key = normalize_key(name);
+        match self.index_of(&key) {
+            Some(idx) if self.entries[idx].queued => self.entries[idx].queued = false,
+            Some(idx) => {
+                let mut entry = self.entries.remove(idx);
+                entry.queued = true;
+                self.entries.push(entry);
+            }
+            None => self.entries.push(QueueEntry {
+                key,
+                name: name.trim().to_string(),
+                queued: true,
+                played: false,
+            }),
+        }
+    }
+
+    /// Toggles the played flag, leaving queue membership and rank untouched.
+    pub fn toggle_played(&mut self, name: &str) {
+        let key = normalize_key(name);
+        match self.index_of(&key) {
+            Some(idx) => self.entries[idx].played = !self.entries[idx].played,
+            None => self.entries.push(QueueEntry {
+                key,
+                name: name.trim().to_string(),
+                queued: false,
+                played: true,
+            }),
+        }
+    }
+
+    /// Returns the 1-based rank of a queued game, or `None` if it is not queued.
+    pub fn rank(&self, name: &str) -> Option<usize> {
+        let key = normalize_key(name);
+        self.entries
+            .iter()
+            .filter(|e| e.queued)
+            .position(|e| e.key == key)
+            .map(|pos| pos + 1)
+    }
+
+    /// Returns the display names of queued games in rank order.
+    pub fn queued_names(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter(|e| e.queued)
+            .map(|e| e.name.as_str())
+            .collect()
+    }
+
+    /// Moves a queued game one rank later. Returns `false` if it is already last
+    /// or is not queued.
+    pub fn move_down(&mut self, name: &str) -> bool {
+        self.swap_with_neighbor(name, true)
+    }
+
+    /// Moves a queued game one rank earlier. Returns `false` if it is already
+    /// first or is not queued.
+    pub fn move_up(&mut self, name: &str) -> bool {
+        self.swap_with_neighbor(name, false)
+    }
+
+    /// Swaps a queued entry with the nearest queued entry after (or before) it.
+    ///
+    /// Played-only entries are skipped: they occupy positions in `entries` but
+    /// hold no rank, so swapping across them would leave rank order unchanged.
+    fn swap_with_neighbor(&mut self, name: &str, forward: bool) -> bool {
+        let key = normalize_key(name);
+        let Some(idx) = self.index_of(&key) else {
+            return false;
+        };
+        if !self.entries[idx].queued {
+            return false;
+        }
+        let neighbor = if forward {
+            self.entries
+                .iter()
+                .enumerate()
+                .skip(idx + 1)
+                .find(|(_, e)| e.queued)
+                .map(|(i, _)| i)
+        } else {
+            self.entries
+                .iter()
+                .enumerate()
+                .take(idx)
+                .rfind(|(_, e)| e.queued)
+                .map(|(i, _)| i)
+        };
+        let Some(neighbor) = neighbor else {
+            return false;
+        };
+        self.entries.swap(idx, neighbor);
+        true
+    }
+}
+
+/// Which slice of the library to show, cycled with Tab / Shift+Tab.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    Queued,
+    Played,
+    Unplayed,
+}
+
+impl Filter {
+    /// The next filter in the Tab cycle.
+    pub fn next(self) -> Self {
+        match self {
+            Filter::All => Filter::Queued,
+            Filter::Queued => Filter::Played,
+            Filter::Played => Filter::Unplayed,
+            Filter::Unplayed => Filter::All,
+        }
+    }
+
+    /// The previous filter in the cycle, reached with Shift+Tab.
+    pub fn prev(self) -> Self {
+        match self {
+            Filter::All => Filter::Unplayed,
+            Filter::Queued => Filter::All,
+            Filter::Played => Filter::Queued,
+            Filter::Unplayed => Filter::Played,
+        }
+    }
+
+    /// The word shown in the status-row chip.
+    pub fn label(self) -> &'static str {
+        match self {
+            Filter::All => "all",
+            Filter::Queued => "queued",
+            Filter::Played => "played",
+            Filter::Unplayed => "unplayed",
+        }
+    }
+
+    /// The row glyph this filter selects for, repeated in its chip so cycling
+    /// teaches the marker vocabulary. `Unplayed` has none: there is no glyph
+    /// for an absence.
+    pub fn glyph(self) -> Option<char> {
+        match self {
+            Filter::Queued => Some(QUEUED_GLYPH),
+            Filter::Played => Some(PLAYED_GLYPH),
+            Filter::All | Filter::Unplayed => None,
+        }
+    }
+}
+
+/// Marker shown against a queued game.
+pub const QUEUED_GLYPH: char = '»';
+/// Marker shown against a played game.
+pub const PLAYED_GLYPH: char = '✓';
+
+/// Narrows `library` to the games matching `filter`.
+///
+/// `Queued` returns games in rank order and skips queued games that are no
+/// longer in the library; every other filter preserves library order.
+pub fn apply_filter(library: &[LibraryEntry], queue: &Queue, filter: Filter) -> Vec<LibraryEntry> {
+    match filter {
+        Filter::All => library.to_vec(),
+        Filter::Queued => queue
+            .entries
+            .iter()
+            .filter(|e| e.queued)
+            .filter_map(|e| library.iter().find(|g| normalize_key(&g.name) == e.key))
+            .cloned()
+            .collect(),
+        Filter::Played => library
+            .iter()
+            .filter(|g| queue.state(&g.name).played)
+            .cloned()
+            .collect(),
+        Filter::Unplayed => library
+            .iter()
+            .filter(|g| !queue.state(&g.name).played)
+            .cloned()
+            .collect(),
+    }
+}

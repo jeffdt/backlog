@@ -2,11 +2,10 @@
 name: mockup
 description: >-
   Use when building a terminal/ANSI mockup for a design discussion, before
-  locking in a visual or rendering change (AGENTS.md's "mock up
-  visual/rendering changes before writing the spec" step). Triggers include
-  "mock this up", "show me a mockup", "render this as ANSI", "let's compare
-  a couple of layouts". Do NOT use for the separate live-binary-preview
-  workflow (launching the real compiled binary via the `run` skill), since
+  locking in a visual or rendering change. Triggers include "mock this up",
+  "show me a mockup", "render this as ANSI", "let's compare a couple of
+  layouts". Do NOT use for the separate live-binary-preview workflow
+  (launching the real compiled binary, see the `live-preview` skill), since
   that already runs real code and has no quality-consistency problem to fix.
 ---
 
@@ -16,9 +15,23 @@ Standardizes how fake (not-real-binary) ANSI terminal mockups get built for
 design discussions, so they no longer vary in quality by construction
 method, window naming, or dimension accuracy.
 
-Unlike rolomux/boomerang, backlog's TUI is not launched into a fixed-width
-tmux popup — it fills whatever terminal window it's given. Mockups here use
-a representative full-terminal size instead of a popup card.
+## 0. Determine this app's mockup shape
+
+Two shapes exist across these TUI apps, and they use different dimensions:
+
+- **Fixed-width popup card** (e.g. rolomux, boomerang): the real binary
+  launches into a tmux popup of a known fixed width. Mockups are an 84-col
+  card with a 2-cell blank margin (80-col drawn content).
+- **Fills the terminal** (e.g. backlog): the real binary has no fixed
+  width, it fills whatever terminal/pane it's given. Mockups use a
+  representative size, 100 columns x 30 rows, instead of a popup card.
+
+Determine which shape this app uses before mocking anything up: check how
+the real binary is launched (the `live-preview` skill's `mux spawn`
+invocation, the app's README "Usage" section, or how `main.rs` sizes its
+viewport). If genuinely ambiguous, ask rather than assume. Once known, reuse
+that shape's dimensions for every mockup in this repo — don't re-derive it
+per task.
 
 ## 1. Start: task ID and topic
 
@@ -30,8 +43,8 @@ id=$(date +%H%M%S)
 ```
 
 Pick a topic: the GitHub issue number if this work is tied to one (e.g.
-`70`), else a short kebab-case description (e.g. `zebra-stripe-color`).
-Window titles are always `<topic>-mockup-<id>` (never spaces, ever).
+`70`), else a short kebab-case description (e.g. `settings-rename`). Window
+titles are always `<topic>-mockup-<id>` (never spaces, ever).
 
 ## 2. Pick a construction method
 
@@ -74,17 +87,41 @@ ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 def visible_width(s: str) -> int:
     return len(ANSI_RE.sub('', s))
 
-def row(content: str, width: int) -> str:
-    pad = width - visible_width(content)
-    return f"{content}{' ' * max(pad, 0)}"
+def row(content: str, width: int, left='', right='') -> str:
+    pad = width - visible_width(content) - visible_width(left) - visible_width(right)
+    return f"{left}{content}{' ' * max(pad, 0)}{right}"
 ```
 
-`visible_width` always measures the ANSI-stripped string, so padding lands
-correctly regardless of how many color codes are embedded earlier in that
-row. `wcwidth` is unnecessary as long as backlog's TUI stays plain ASCII
-with no wide characters.
+`visible_width` always measures the ANSI-stripped string, so padding (and
+any border characters) land in the same column on every row regardless of
+how many color codes are embedded earlier in that row. `wcwidth` is
+unnecessary as long as the project's UI is plain ASCII box-drawing with no
+wide characters.
 
-Example full mockup (a search results list, one row highlighted):
+Fixed-width popup example (an 84-col card with a 2-cell margin, one colored
+header row, bordered with `left='│', right='│'`):
+
+```python
+WIDTH = 84
+MARGIN = 2
+CARD_WIDTH = WIDTH - MARGIN * 2  # 80
+
+def main():
+    blank_margin = " " * WIDTH
+    print(blank_margin)
+    print(" " * MARGIN + "┌" + "─" * (CARD_WIDTH - 2) + "┐" + " " * MARGIN)
+    title = f"{fg('Cyan')} PINNED{RESET}"
+    print(" " * MARGIN + row(title, CARD_WIDTH, '│', '│') + " " * MARGIN)
+    print(" " * MARGIN + row("  1  my-session", CARD_WIDTH, '│', '│') + " " * MARGIN)
+    print(" " * MARGIN + "└" + "─" * (CARD_WIDTH - 2) + "┘" + " " * MARGIN)
+    print(blank_margin)
+
+if __name__ == "__main__":
+    main()
+```
+
+Fills-terminal example (a 100-col search results list, one row highlighted,
+no card border):
 
 ```python
 WIDTH = 100
@@ -116,11 +153,12 @@ crossterm would emit to a real terminal: the same rendering path the
 shipped binary uses, so alignment and color output are correct by
 construction, not by care.
 
-Use `Viewport::Fixed` explicitly. Without it, `CrosstermBackend::size()`
-queries the real attached terminal's size via `crossterm::terminal::size()`,
-which is wrong (or outright errors, since the agent's Bash tool has no
-controlling tty) when rendering headlessly. A fixed viewport sidesteps this
-entirely.
+Use `Viewport::Fixed` explicitly, sized to whichever shape this app uses (84
+x whatever height for a fixed-width popup, 100x30 for fills-terminal).
+Without it, `CrosstermBackend::size()` queries the real attached terminal's
+size via `crossterm::terminal::size()`, which is wrong (or outright errors,
+since the agent's Bash tool has no controlling tty) when rendering
+headlessly. A fixed viewport sidesteps this entirely.
 
 `CrosstermBackend::writer()` is gated behind an unstable ratatui feature and
 isn't callable on the pinned version, so don't rely on it to get the bytes
@@ -137,12 +175,13 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
     Terminal, TerminalOptions, Viewport,
 };
 
-const WIDTH: u16 = 100;
-const HEIGHT: u16 = 30;
+const WIDTH: u16 = 84;   // or 100 for a fills-terminal app
+const HEIGHT: u16 = 20;  // or 30 for a fills-terminal app
+const MARGIN: u16 = 2;   // 0 for a fills-terminal app (no popup card)
 
 #[derive(Clone)]
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -163,11 +202,19 @@ fn main() -> std::io::Result<()> {
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
     terminal.draw(|frame| {
         let area = Rect::new(0, 0, WIDTH, HEIGHT);
-        let row = Paragraph::new(Line::from(Span::styled(
-            "Hollow Knight",
-            Style::default().fg(Color::Cyan).bg(Color::DarkGray),
-        )));
-        frame.render_widget(row, Rect::new(area.x, area.y, area.width, 1));
+        let inner = Rect::new(
+            area.x + MARGIN,
+            area.y + MARGIN,
+            area.width.saturating_sub(MARGIN * 2),
+            area.height.saturating_sub(MARGIN * 2),
+        );
+        let block = Block::default().borders(Borders::ALL);
+        let title = Paragraph::new(Line::from(Span::styled(
+            " PINNED",
+            Style::default().fg(Color::Cyan),
+        )))
+        .block(block);
+        frame.render_widget(title, inner);
     })?;
     let bytes = buf.borrow();
     print!("{}", String::from_utf8_lossy(&bytes));
@@ -175,9 +222,10 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-Run via `cargo run --example mockup --quiet`. backlog is a lib+bin crate, so
-the example can `use backlog::...` directly to reuse real functions (e.g.
-`platform_color`) rather than hand-copying constants.
+Run via `cargo run --example mockup --quiet`. If the crate has a lib target,
+the example can `use <crate>::...` directly to reuse real functions (color
+constants, etc.) rather than hand-copying them. Bin-only crates use
+`ratatui::style::Color`'s named variants directly instead.
 
 Note: crossterm serializes ratatui's named colors as `\x1b[38;5;0` through
 `\x1b[38;5;15` (an indexed SGR form), not the classic `\x1b[30`-`\x1b[37`/
@@ -189,13 +237,15 @@ checking ratatui-path output.
 
 ## 5. Standards (both methods)
 
-- **Size**: no fixed popup width here — backlog's TUI fills whatever
-  terminal it's launched in. Use a representative size of **100 columns x
-  30 rows** unless the discussion specifically concerns behavior at a
-  narrower/shorter size, in which case mock up that size instead and say so.
+- **Size**: whichever shape section 0 determined for this app. Fixed-width
+  popup: always 84 columns, 2-cell margin, 80-col drawn card; height has no
+  fixed number, pick whatever's reasonable for the content. Fills-terminal:
+  a representative **100 columns x 30 rows**, unless the discussion
+  specifically concerns behavior at a narrower/shorter size, in which case
+  mock up that size instead and say so.
 - **Colors**: only the 16 named ANSI colors shown in the `ANSI_FG`/`ANSI_BG`
   tables above (matches `ratatui::style::Color`'s named, non-RGB variants);
-  never invent a color the real TUI couldn't produce.
+  never invent a color the real app couldn't produce.
 
 ## 6. Launching
 
@@ -224,10 +274,17 @@ tmux split-window -h -t "$tab"   # left-right, if the window is wide enough
 tmux split-window -t "$tab"      # stacked top-bottom otherwise (tmux default)
 ```
 
+For a fixed-width popup app, check whether the window is wide enough for a
+true left-right split first (`N` options need `N*84 + (N-1)` columns):
+
+```bash
+width=$(tmux display-message -p -t "$tab" '#{window_width}')
+```
+
 Write one script per option and label each variant inline in its own title
-row (e.g. `backlog -- BEFORE zebra` / `backlog -- AFTER zebra`) so the two
-panes are distinguishable at a glance without relying on pane position or
-memory of which command went where.
+row (e.g. `<app> -- BEFORE arrow` / `<app> -- AFTER arrow`, using this
+repo's actual app name) so the two panes are distinguishable at a glance
+without relying on pane position or memory of which command went where.
 
 `mux send --tab` only reaches a tab's *active* pane, so once split, target
 each pane directly. Grab their IDs first, then send each variant's command
@@ -251,5 +308,6 @@ rm -f examples/mockup.rs   # only if the ratatui path was used
 ```
 
 Deleting `examples/mockup.rs` isn't just tidiness: it sits under `cargo
-clippy --all-targets`, part of the normal build/test loop. Leaving it around
-would break the *next*, unrelated `cargo clippy` run.
+clippy --all-targets -- -D warnings` (or similar), part of your own local
+build/test loop. Leaving it around would break the *next*, unrelated `cargo
+clippy` run.

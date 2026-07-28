@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::cache;
+use crate::queue;
 use crate::{Game, LibraryEntry};
 
 const PLATFORMS: &[&str] = &["epic", "gog", "amazon", "steam"];
@@ -54,14 +55,16 @@ pub fn load_all_games(cache_dir: &Path) -> LoadResult {
 
 /// Deduplicates a flat list of games into library entries, merging cross-store duplicates.
 ///
-/// Match key is `name.trim().to_lowercase()`. First-seen display casing is preserved.
-/// Platforms are listed in encounter order with duplicates removed.
+/// Match key is `queue::normalize_key`, shared with queue state so that every
+/// queued or played flag stays reachable if that key ever changes. First-seen
+/// display casing is preserved. Platforms are listed in encounter order with
+/// duplicates removed.
 pub fn dedupe(games: Vec<Game>) -> Vec<LibraryEntry> {
     let mut key_to_index: HashMap<String, usize> = HashMap::new();
     let mut entries: Vec<LibraryEntry> = Vec::new();
 
     for game in games {
-        let key = game.name.trim().to_lowercase();
+        let key = queue::normalize_key(&game.name);
         if let Some(&idx) = key_to_index.get(&key) {
             if !entries[idx].platforms.contains(&game.platform) {
                 entries[idx].platforms.push(game.platform);

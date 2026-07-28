@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use clap::{Parser, Subcommand};
 
-use backlog::{cache, config, loader, search, sources, sync};
+use backlog::{cache, config, loader, output, queue, search, sources, sync};
 
 #[derive(Parser)]
 #[command(
@@ -23,6 +23,8 @@ enum Commands {
     Sync,
     /// Configure Steam API credentials
     Setup,
+    /// Print the ranked queue
+    Queue,
 }
 
 fn main() {
@@ -31,6 +33,7 @@ fn main() {
     match cli.command {
         Some(Commands::Setup) => run_setup(),
         Some(Commands::Sync) => run_sync(),
+        Some(Commands::Queue) => run_queue(),
         None => {
             if let Some(query) = cli.query {
                 run_search(&query);
@@ -57,24 +60,44 @@ fn run_search(query: &str) {
     let matches = search::fuzzy_search(query, &result.games);
 
     if matches.is_empty() {
-        println!("No matches for '{query}'.");
+        writeln!(io::stdout(), "No matches for '{query}'.").ok();
         return;
     }
 
-    let max_name_len = matches.iter().map(|r| r.game.name.len()).max().unwrap_or(0);
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    for r in &matches {
-        let platform_label = r.game.platforms.join(" / ");
-        writeln!(
-            out,
-            "{:<width$}  {}",
-            r.game.name,
-            platform_label,
-            width = max_name_len
-        )
-        .ok();
+    let q = load_queue_or_warn();
+    writeln!(io::stdout(), "{}", output::format_search_rows(&matches, &q)).ok();
+}
+
+fn run_queue() {
+    let cache_dir = cache::default_cache_dir();
+    let result = loader::load_all_games(&cache_dir);
+
+    for w in &result.warnings {
+        eprintln!("Warning: {w}");
     }
+
+    if result.games.is_empty() {
+        eprintln!("No games loaded. Run `backlog sync` first.");
+        return;
+    }
+
+    let q = load_queue_or_warn();
+    let rows = output::format_queue_rows(&result.games, &q);
+
+    if rows.is_empty() {
+        eprintln!("Queue is empty. Press Enter on a game in the TUI to queue it.");
+        return;
+    }
+    writeln!(io::stdout(), "{rows}").ok();
+}
+
+/// Loads queue state for a read-only command, warning and continuing with an
+/// empty queue when the file cannot be read.
+fn load_queue_or_warn() -> queue::Queue {
+    queue::load(&queue::default_queue_path()).unwrap_or_else(|e| {
+        eprintln!("Warning: {e}");
+        queue::Queue::default()
+    })
 }
 
 fn run_sync() {
@@ -156,7 +179,10 @@ fn run_tui() {
         load_result
     };
 
-    if let Err(e) = backlog::tui::run_with(load_result, cache_dir, heroic_dir, config_path) {
+    let queue_path = queue::default_queue_path();
+    if let Err(e) =
+        backlog::tui::run_with(load_result, cache_dir, heroic_dir, config_path, queue_path)
+    {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
