@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use backlog::queue::Queue;
 use backlog::{LibraryEntry, output, search};
 
@@ -137,4 +139,22 @@ fn queue_rows_are_empty_when_nothing_is_queued() {
 #[test]
 fn search_rows_are_empty_when_there_are_no_results() {
     assert!(output::format_search_rows(&[], &Queue::default()).is_empty());
+}
+
+/// `release.sh cut` ends on `backlog --version`, so a missing version flag
+/// fails a release after the tag and tap have already been pushed.
+#[test]
+fn version_flag_prints_the_bare_package_version() {
+    for flag in ["--version", "-V"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+            .arg(flag)
+            .output()
+            .expect("failed to run the backlog binary");
+
+        assert!(out.status.success(), "{flag} exited with {}", out.status);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            env!("CARGO_PKG_VERSION")
+        );
+    }
 }
