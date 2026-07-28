@@ -160,7 +160,10 @@ fn run_tui() {
         load_result
     };
 
-    if let Err(e) = backlog::tui::run_with(load_result, cache_dir, heroic_dir, config_path) {
+    let queue_path = queue::default_queue_path();
+    if let Err(e) =
+        backlog::tui::run_with(load_result, cache_dir, heroic_dir, config_path, queue_path)
+    {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }

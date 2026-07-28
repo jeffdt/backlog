@@ -16,6 +16,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 use crate::LibraryEntry;
 use crate::cache;
 use crate::loader::{self, LoadResult};
+use crate::queue::{PLAYED_GLYPH, QUEUED_GLYPH};
 use crate::search;
 use crate::sync;
 use crate::sync::{SyncReport, SyncStatus};
@@ -43,6 +44,11 @@ struct App {
     cache_dir: PathBuf,
     heroic_dir: PathBuf,
     config_path: PathBuf,
+    queue: crate::queue::Queue,
+    /// Consumed by the key handler that saves queue edits, added in a later task.
+    #[allow(dead_code)]
+    queue_path: PathBuf,
+    filter: crate::queue::Filter,
 }
 
 impl App {
@@ -51,6 +57,7 @@ impl App {
         cache_dir: PathBuf,
         heroic_dir: PathBuf,
         config_path: PathBuf,
+        queue_path: PathBuf,
     ) -> Self {
         let sync_age = loader::format_sync_age(load_result.oldest_update);
         Self {
@@ -66,7 +73,15 @@ impl App {
             cache_dir,
             heroic_dir,
             config_path,
+            queue: crate::queue::load(&queue_path),
+            queue_path,
+            filter: crate::queue::Filter::default(),
         }
+    }
+
+    /// The library narrowed to the active filter, in the order it renders.
+    fn filtered(&self) -> Vec<LibraryEntry> {
+        crate::queue::apply_filter(&self.games, &self.queue, self.filter)
     }
 
     fn start_sync(&mut self) {
@@ -115,11 +130,13 @@ pub fn run(cache_dir: &Path) -> io::Result<()> {
     let load_result = loader::load_all_games(cache_dir);
     let heroic_dir = crate::sources::heroic::heroic_store_cache_dir();
     let config_path = crate::config::default_config_path();
+    let queue_path = crate::queue::default_queue_path();
     run_with(
         load_result,
         cache_dir.to_path_buf(),
         heroic_dir,
         config_path,
+        queue_path,
     )
 }
 
@@ -129,6 +146,7 @@ pub fn run_with(
     cache_dir: PathBuf,
     heroic_dir: PathBuf,
     config_path: PathBuf,
+    queue_path: PathBuf,
 ) -> io::Result<()> {
     for w in &load_result.warnings {
         eprintln!("Warning: {w}");
@@ -152,7 +170,7 @@ pub fn run_with(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(load_result, cache_dir, heroic_dir, config_path);
+    let mut app = App::new(load_result, cache_dir, heroic_dir, config_path, queue_path);
     let result = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -222,6 +240,21 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
             }
         }
     }
+}
+
+/// Renders the queue marker field as colored spans.
+fn marker_spans(state: crate::queue::GameState) -> Vec<Span<'static>> {
+    let queued = if state.queued {
+        Span::styled(QUEUED_GLYPH.to_string(), Style::default().fg(Color::Cyan))
+    } else {
+        Span::raw(" ")
+    };
+    let played = if state.played {
+        Span::styled(PLAYED_GLYPH.to_string(), Style::default().fg(Color::Green))
+    } else {
+        Span::raw(" ")
+    };
+    vec![queued, played, Span::raw(" ")]
 }
 
 fn platform_color(platform: &str) -> Color {
@@ -305,12 +338,14 @@ fn draw(f: &mut Frame, app: &App) {
         Paragraph::new(status_text.as_str()).style(Style::default().fg(Color::DarkGray));
     f.render_widget(status_widget, chunks[2]);
 
-    // Only show results when the user has typed something
-    if app.input.is_empty() {
+    // Only show results when the user has typed something, unless a queue
+    // filter is narrowing the list on its own
+    if app.input.is_empty() && app.filter == crate::queue::Filter::All {
         return;
     }
 
-    let results = search::fuzzy_search(&app.input, &app.games);
+    let filtered = app.filtered();
+    let results = search::fuzzy_search(&app.input, &filtered);
     if results.is_empty() {
         return;
     }
@@ -336,7 +371,7 @@ fn draw(f: &mut Frame, app: &App) {
         .map(|r| r.game.name.chars().count())
         .max()
         .unwrap_or(0)
-        .min(available_width.saturating_sub(10));
+        .min(available_width.saturating_sub(13));
 
     for (i, result) in results
         .iter()
@@ -359,22 +394,23 @@ fn draw(f: &mut Frame, app: &App) {
         let match_set: std::collections::HashSet<u32> =
             result.match_indices.iter().copied().collect();
 
-        let mut name_spans: Vec<Span> = result
-            .game
-            .name
-            .chars()
-            .enumerate()
-            .map(|(char_idx, ch)| {
-                let style = if match_set.contains(&(char_idx as u32)) {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                Span::styled(ch.to_string(), style)
-            })
-            .collect();
+        let state = app.queue.state(&result.game.name);
+        let mut name_spans: Vec<Span> = marker_spans(state);
+        let base_color = if state.played {
+            Color::Gray
+        } else {
+            Color::White
+        };
+        name_spans.extend(result.game.name.chars().enumerate().map(|(char_idx, ch)| {
+            let style = if match_set.contains(&(char_idx as u32)) {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(base_color)
+            };
+            Span::styled(ch.to_string(), style)
+        }));
 
         // Pad name to align platform column
         let name_char_count = result.game.name.chars().count();
@@ -395,7 +431,7 @@ fn draw(f: &mut Frame, app: &App) {
         if is_selected {
             row_style = row_style.bg(Color::DarkGray);
         } else if is_even {
-            row_style = row_style.bg(Color::Rgb(30, 30, 30));
+            row_style = row_style.bg(Color::Black);
         }
 
         let paragraph = Paragraph::new(Line::from(name_spans)).style(row_style);
@@ -465,5 +501,56 @@ mod tests {
     #[test]
     fn empty_reports_produce_empty_string() {
         assert_eq!(format_sync_summary(&[], &HashMap::new()), "");
+    }
+
+    fn marker_chars(state: crate::queue::GameState) -> String {
+        marker_spans(state)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn marker_spans_render_glyphs_blanks_and_a_trailing_space() {
+        use crate::queue::GameState;
+        assert_eq!(
+            marker_chars(GameState {
+                queued: true,
+                played: false
+            }),
+            "»  "
+        );
+        assert_eq!(
+            marker_chars(GameState {
+                queued: false,
+                played: true
+            }),
+            " ✓ "
+        );
+        assert_eq!(
+            marker_chars(GameState {
+                queued: true,
+                played: true
+            }),
+            "»✓ "
+        );
+        assert_eq!(
+            marker_chars(GameState {
+                queued: false,
+                played: false
+            }),
+            "   "
+        );
+    }
+
+    #[test]
+    fn marker_spans_color_queued_cyan_and_played_green() {
+        use crate::queue::GameState;
+        let spans = marker_spans(GameState {
+            queued: true,
+            played: true,
+        });
+        assert_eq!(spans[0].style.fg, Some(Color::Cyan));
+        assert_eq!(spans[1].style.fg, Some(Color::Green));
     }
 }
