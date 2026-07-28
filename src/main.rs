@@ -60,25 +60,44 @@ fn run_search(query: &str) {
     let matches = search::fuzzy_search(query, &result.games);
 
     if matches.is_empty() {
-        println!("No matches for '{query}'.");
+        writeln!(io::stdout(), "No matches for '{query}'.").ok();
         return;
     }
 
-    let q = queue::load(&queue::default_queue_path());
-    println!("{}", output::format_search_rows(&matches, &q));
+    let q = load_queue_or_warn();
+    writeln!(io::stdout(), "{}", output::format_search_rows(&matches, &q)).ok();
 }
 
 fn run_queue() {
     let cache_dir = cache::default_cache_dir();
     let result = loader::load_all_games(&cache_dir);
-    let q = queue::load(&queue::default_queue_path());
+
+    for w in &result.warnings {
+        eprintln!("Warning: {w}");
+    }
+
+    if result.games.is_empty() {
+        eprintln!("No games loaded. Run `backlog sync` first.");
+        return;
+    }
+
+    let q = load_queue_or_warn();
     let rows = output::format_queue_rows(&result.games, &q);
 
     if rows.is_empty() {
         eprintln!("Queue is empty. Press Enter on a game in the TUI to queue it.");
         return;
     }
-    println!("{rows}");
+    writeln!(io::stdout(), "{rows}").ok();
+}
+
+/// Loads queue state for a read-only command, warning and continuing with an
+/// empty queue when the file cannot be read.
+fn load_queue_or_warn() -> queue::Queue {
+    queue::load(&queue::default_queue_path()).unwrap_or_else(|e| {
+        eprintln!("Warning: {e}");
+        queue::Queue::default()
+    })
 }
 
 fn run_sync() {

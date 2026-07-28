@@ -46,7 +46,13 @@ struct App {
     config_path: PathBuf,
     queue: crate::queue::Queue,
     queue_path: PathBuf,
+    /// False when the queue file failed to load, so a file we could not read
+    /// is never replaced by the empty queue standing in for it.
+    queue_writable: bool,
     filter: crate::queue::Filter,
+    /// Queue load or write failure, shown in place of the hint until the next
+    /// successful write.
+    status_message: Option<String>,
 }
 
 impl App {
@@ -58,6 +64,10 @@ impl App {
         queue_path: PathBuf,
     ) -> Self {
         let sync_age = loader::format_sync_age(load_result.oldest_update);
+        let (queue, queue_writable, status_message) = match crate::queue::load(&queue_path) {
+            Ok(queue) => (queue, true, None),
+            Err(e) => (crate::queue::Queue::default(), false, Some(e)),
+        };
         Self {
             input: String::new(),
             cursor_pos: 0,
@@ -71,9 +81,11 @@ impl App {
             cache_dir,
             heroic_dir,
             config_path,
-            queue: crate::queue::load(&queue_path),
+            queue,
             queue_path,
+            queue_writable,
             filter: crate::queue::Filter::default(),
+            status_message,
         }
     }
 
@@ -147,14 +159,20 @@ impl App {
 
     /// Persists the queue, surfacing a write failure in the status row rather
     /// than tearing down the terminal.
+    ///
+    /// Refuses to write at all when the file failed to load: the in-memory
+    /// queue is then an empty stand-in, not the user's state.
     fn persist_queue(&mut self) {
-        if let Err(e) = crate::queue::save(&self.queue_path, &self.queue) {
-            self.sync_state = SyncState::Done(vec![SyncReport {
-                platform: "queue".to_string(),
-                game_count: 0,
-                status: SyncStatus::Error(e.to_string()),
-            }]);
+        if !self.queue_writable {
+            return;
         }
+        self.status_message = match crate::queue::save(&self.queue_path, &self.queue) {
+            Ok(()) => None,
+            Err(e) => Some(format!(
+                "queue not saved: {e} ({})",
+                self.queue_path.display()
+            )),
+        };
     }
 
     fn toggle_queued(&mut self) {
@@ -175,8 +193,11 @@ impl App {
 
     /// Moves the selected game one rank, keeping the cursor on it.
     ///
-    /// Only meaningful under the queued filter. With a search active, rows are
-    /// score-ordered rather than rank-ordered, so the cursor stays put.
+    /// Only meaningful under the queued filter. The cursor is re-derived from
+    /// the moved game's position in the freshly filtered rows rather than
+    /// nudged by one: a swap across a queued game missing from the library
+    /// changes rank without moving any visible row, and with a search active
+    /// rows are score-ordered rather than rank-ordered.
     fn move_selected(&mut self, down: bool) {
         if self.filter != crate::queue::Filter::Queued {
             return;
@@ -193,12 +214,12 @@ impl App {
         if !moved {
             return;
         }
-        if self.input.is_empty() {
-            self.selected = if down {
-                clamped.saturating_add(1)
-            } else {
-                clamped.saturating_sub(1)
-            };
+        let filtered = self.filtered();
+        if let Some(row) = search::fuzzy_search(&self.input, &filtered)
+            .iter()
+            .position(|r| r.game.name == name)
+        {
+            self.selected = row;
         }
         self.persist_queue();
     }
@@ -380,6 +401,14 @@ fn filter_chip_color(filter: crate::queue::Filter) -> Color {
     }
 }
 
+/// The keybind hints for a filter, advertising reordering only where it works.
+fn keybind_hint(filter: crate::queue::Filter) -> &'static str {
+    match filter {
+        crate::queue::Filter::Queued => "enter queue   ^p played   ^j/^k rank   tab filter",
+        _ => "enter queue   ^p played   tab filter",
+    }
+}
+
 fn platform_color(platform: &str) -> Color {
     match platform {
         "steam" => Color::Blue,
@@ -452,10 +481,18 @@ fn draw(f: &mut Frame, app: &App) {
     let cursor_y = chunks[0].y;
     f.set_cursor_position((cursor_x, cursor_y));
 
-    let hint = match &app.sync_state {
-        SyncState::Idle => "enter queue   ^p played   tab filter".to_string(),
-        SyncState::Syncing => "syncing...".to_string(),
-        SyncState::Done(reports) => format_sync_summary(reports, &app.sync_before_counts),
+    // A queue problem outranks the sync summary: it is the only state here the
+    // user cannot regenerate by syncing again.
+    let (hint, hint_color) = match &app.status_message {
+        Some(message) => (message.clone(), Color::Red),
+        None => {
+            let hint = match &app.sync_state {
+                SyncState::Idle => keybind_hint(app.filter).to_string(),
+                SyncState::Syncing => "syncing...".to_string(),
+                SyncState::Done(reports) => format_sync_summary(reports, &app.sync_before_counts),
+            };
+            (hint, Color::DarkGray)
+        }
     };
     let status_line = Line::from(vec![
         Span::styled(
@@ -465,7 +502,7 @@ fn draw(f: &mut Frame, app: &App) {
                 .bg(filter_chip_color(app.filter)),
         ),
         Span::raw("  "),
-        Span::styled(hint, Style::default().fg(Color::DarkGray)),
+        Span::styled(hint, Style::default().fg(hint_color)),
     ]);
     f.render_widget(Paragraph::new(status_line), chunks[2]);
 
@@ -767,5 +804,52 @@ mod tests {
 
         assert_eq!(app.queue.rank("C"), Some(2));
         assert_eq!(app.selected, 1, "cursor should self-heal onto C's new row");
+    }
+
+    #[test]
+    fn move_selected_stays_on_the_game_when_the_swap_moves_no_visible_row() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["Tunic", "Hades"]);
+        app.queue.toggle_queued("Tunic");
+        app.queue.toggle_queued("Uninstalled Game");
+        app.queue.toggle_queued("Hades");
+        app.filter = crate::queue::Filter::Queued;
+        app.selected = 0;
+
+        app.move_selected(true);
+
+        // Tunic swapped past a queued game absent from the library, so its rank
+        // changed but the visible rows did not.
+        assert_eq!(app.queue.rank("Tunic"), Some(2));
+        assert_eq!(app.selected, 0, "cursor should stay on Tunic");
+    }
+
+    #[test]
+    fn hint_advertises_reordering_only_under_the_queued_filter() {
+        use crate::queue::Filter;
+        assert!(keybind_hint(Filter::Queued).contains("^j/^k rank"));
+        assert!(!keybind_hint(Filter::All).contains("rank"));
+        assert!(!keybind_hint(Filter::Played).contains("rank"));
+        assert!(!keybind_hint(Filter::Unplayed).contains("rank"));
+    }
+
+    #[test]
+    fn an_unreadable_queue_file_is_surfaced_and_never_overwritten() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("queue.json");
+        std::fs::write(&path, "{ not json at all").unwrap();
+
+        let mut app = test_app(&dir, &["Tunic"]);
+        assert!(app.status_message.is_some());
+        assert!(!app.queue_writable);
+
+        app.input = "tunic".to_string();
+        app.toggle_queued();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{ not json at all",
+            "a queue file we could not read must survive a toggle"
+        );
     }
 }

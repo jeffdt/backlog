@@ -21,17 +21,57 @@ fn normalize_key_lowercases_and_trims() {
 #[test]
 fn load_returns_empty_queue_when_file_missing() {
     let dir = TempDir::new().unwrap();
-    let loaded = queue::load(&dir.path().join("nope.json"));
+    let loaded = queue::load(&dir.path().join("nope.json")).unwrap();
     assert!(loaded.entries.is_empty());
 }
 
 #[test]
-fn load_returns_empty_queue_when_file_malformed() {
+fn load_errors_when_file_is_malformed_rather_than_reporting_an_empty_queue() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("queue.json");
     std::fs::write(&path, "{ not json at all").unwrap();
-    let loaded = queue::load(&path);
-    assert!(loaded.entries.is_empty());
+    let err = queue::load(&path).unwrap_err();
+    assert!(err.contains("cannot parse"), "unexpected error: {err}");
+    assert!(err.contains("queue.json"), "unexpected error: {err}");
+}
+
+#[test]
+fn load_errors_when_the_file_cannot_be_read() {
+    let dir = TempDir::new().unwrap();
+    // A directory in the queue file's place fails to read for a reason other
+    // than absence, which must not be mistaken for an empty queue.
+    let path = dir.path().join("queue.json");
+    std::fs::create_dir(&path).unwrap();
+    let err = queue::load(&path).unwrap_err();
+    assert!(err.contains("cannot read"), "unexpected error: {err}");
+}
+
+#[test]
+fn load_refuses_a_file_written_by_a_newer_backlog() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("queue.json");
+    std::fs::write(
+        &path,
+        r#"{"version": 2, "entries": [], "ratings": {"tunic": 5}}"#,
+    )
+    .unwrap();
+    let err = queue::load(&path).unwrap_err();
+    assert!(err.contains("schema version 2"), "unexpected error: {err}");
+    assert!(
+        err.contains("refusing to overwrite"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn save_leaves_no_temp_file_behind_when_the_rename_fails() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("queue.json");
+    // A directory at the destination makes the rename fail while the temp
+    // write succeeds.
+    std::fs::create_dir(&path).unwrap();
+    assert!(queue::save(&path, &Queue::default()).is_err());
+    assert!(!dir.path().join("queue.json.tmp").exists());
 }
 
 #[test]
@@ -47,7 +87,7 @@ fn save_and_load_round_trips_order_and_flags() {
     };
     queue::save(&path, &q).unwrap();
 
-    let loaded = queue::load(&path);
+    let loaded = queue::load(&path).unwrap();
     assert_eq!(loaded.entries.len(), 2);
     assert_eq!(loaded.entries[0].name, "Disco Elysium");
     assert_eq!(loaded.entries[1].name, "Tunic");
@@ -67,7 +107,7 @@ fn save_drops_entries_with_both_flags_cleared() {
     };
     queue::save(&path, &q).unwrap();
 
-    let loaded = queue::load(&path);
+    let loaded = queue::load(&path).unwrap();
     assert_eq!(loaded.entries.len(), 1);
     assert_eq!(loaded.entries[0].name, "Pentiment");
 }
@@ -204,12 +244,22 @@ fn moves_are_no_ops_for_games_that_are_not_queued() {
 }
 
 #[test]
-fn moves_skip_over_played_only_entries() {
+fn move_down_skips_over_played_only_entries() {
     let mut q = Queue::default();
     q.toggle_queued("Disco Elysium");
     q.toggle_played("Pentiment");
     q.toggle_queued("Outer Wilds");
     assert!(q.move_down("Disco Elysium"));
+    assert_eq!(q.queued_names(), vec!["Outer Wilds", "Disco Elysium"]);
+}
+
+#[test]
+fn move_up_skips_over_played_only_entries() {
+    let mut q = Queue::default();
+    q.toggle_queued("Disco Elysium");
+    q.toggle_played("Pentiment");
+    q.toggle_queued("Outer Wilds");
+    assert!(q.move_up("Outer Wilds"));
     assert_eq!(q.queued_names(), vec!["Outer Wilds", "Disco Elysium"]);
 }
 
@@ -236,6 +286,7 @@ fn filter_cycles_forward_and_backward() {
 
     assert_eq!(Filter::All.prev(), Filter::Unplayed);
     assert_eq!(Filter::Unplayed.prev(), Filter::Played);
+    assert_eq!(Filter::Played.prev(), Filter::Queued);
     assert_eq!(Filter::Queued.prev(), Filter::All);
 }
 

@@ -72,7 +72,11 @@ Each source converts an external format into `Vec<Game>`. Two kinds:
   `version` 1). Entry array order is the queue rank. Writes are atomic
   (temp file plus rename) and happen synchronously on every mutation,
   since unlike a platform cache the queue can't be regenerated from an
-  upstream source. A missing or malformed file yields an empty queue.
+  upstream source. Only a genuinely absent file yields an empty queue:
+  `queue::load` returns `Err` for an unreadable file, unparseable JSON, or
+  a `version` newer than this build. The TUI then shows that error and
+  refuses to write, so state it could not read is never overwritten; the
+  CLI warns and continues read-only.
 - Both modules resolve paths from `$HOME`, falling back to `.` when unset —
   this fallback is what makes them testable with `tempfile`.
 
@@ -85,9 +89,11 @@ highlighting.
 ### Queue (`queue.rs`, `output.rs`)
 `queue.rs` tracks two independent per-game flags, `queued` and `played`
 (deliberately not mutually exclusive: a game you finished and want to
-replay again is both), keyed by `normalize_key(name)`, the same
-`name.trim().to_lowercase()` key `loader::dedupe` uses, so state survives
-re-syncs and casing changes. Entry order in the persisted queue is the
+replay again is both), keyed by `normalize_key(name)`. `loader::dedupe`
+calls that same function rather than repeating the expression, so a
+library entry and its queue state can never be keyed differently and
+state survives re-syncs and casing changes. Entry order in the persisted
+queue is the
 rank; there is no separate rank field. It also defines
 `Filter::{All, Queued, Played, Unplayed}` and `apply_filter`. Queue state
 is deliberately decoupled from `loader` and `search`, which have no

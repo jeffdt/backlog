@@ -48,7 +48,9 @@ backlog
 
 Mark games as queued (want to play soon) or played from the TUI, then
 filter and reorder the list. Queue state lives in
-`~/.local/share/backlog/queue.json`.
+`~/.local/share/backlog/queue.json`. If that file can't be read or parsed,
+backlog says so and stops saving rather than overwriting it, so a bad
+hand-edit never costs you the queue.
 
 | Key | Action |
 | --- | --- |

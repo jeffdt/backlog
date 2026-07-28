@@ -15,7 +15,9 @@ pub struct QueueEntry {
     pub key: String,
     /// Display name as first seen, kept so the file is readable on its own.
     pub name: String,
+    /// Whether the game is in the ranked queue. Independent of `played`.
     pub queued: bool,
+    /// Whether the game has been played. Independent of `queued`.
     pub played: bool,
 }
 
@@ -62,12 +64,31 @@ pub fn default_queue_path() -> PathBuf {
         .join("queue.json")
 }
 
-/// Reads the queue from disk, returning an empty queue if missing or malformed.
-pub fn load(path: &Path) -> Queue {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_default()
+/// Reads the queue from disk.
+///
+/// Only a genuinely absent file yields an empty queue. Anything else (an
+/// unreadable file, unparseable JSON, or a `version` newer than this build
+/// understands) is an error whose text is meant to be shown to the user, so
+/// that a file we could not understand is never silently overwritten.
+pub fn load(path: &Path) -> Result<Queue, String> {
+    // The reason leads and the path trails: this text lands in a one-line
+    // status row that clips, and the reason is the part worth keeping.
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Queue::default()),
+        Err(e) => return Err(format!("cannot read queue file: {e} ({})", path.display())),
+    };
+    let queue: Queue = serde_json::from_str(&contents)
+        .map_err(|e| format!("cannot parse queue file: {e} ({})", path.display()))?;
+    if queue.version > QUEUE_VERSION {
+        return Err(format!(
+            "queue file is schema version {} but this backlog only understands \
+             {QUEUE_VERSION}; refusing to overwrite {}",
+            queue.version,
+            path.display()
+        ));
+    }
+    Ok(queue)
 }
 
 /// Writes the queue to disk, dropping entries whose flags are all cleared.
@@ -89,8 +110,11 @@ pub fn save(path: &Path, queue: &Queue) -> io::Result<()> {
     };
     let json = serde_json::to_string_pretty(&pruned).map_err(io::Error::other)?;
     let temp = path.with_extension("json.tmp");
-    std::fs::write(&temp, json)?;
-    std::fs::rename(&temp, path)
+    let written = std::fs::write(&temp, json).and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
 }
 
 impl Queue {

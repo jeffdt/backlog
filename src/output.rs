@@ -34,6 +34,10 @@ pub fn format_search_rows(results: &[SearchResult<'_>], queue: &Queue) -> String
 }
 
 /// Formats the queue as ranked rows, skipping games no longer in the library.
+///
+/// Ranks come from the queue itself, not from row position, so a queued game
+/// missing from the library leaves a visible gap here exactly as it does in the
+/// TUI rather than being silently renumbered away.
 pub fn format_queue_rows(library: &[LibraryEntry], queue: &Queue) -> String {
     let entries = queue::apply_filter(library, queue, queue::Filter::Queued);
     if entries.is_empty() {
@@ -46,8 +50,10 @@ pub fn format_queue_rows(library: &[LibraryEntry], queue: &Queue) -> String {
         .unwrap_or(0);
     entries
         .iter()
-        .enumerate()
-        .map(|(i, e)| {
+        .map(|e| {
+            let rank = queue
+                .rank(&e.name)
+                .map_or(String::new(), |rank| rank.to_string());
             let played = if queue.state(&e.name).played {
                 PLAYED_GLYPH
             } else {
@@ -56,8 +62,7 @@ pub fn format_queue_rows(library: &[LibraryEntry], queue: &Queue) -> String {
             let platforms = e.platforms.join(" / ");
             let pad = max_name_len - e.name.chars().count();
             format!(
-                "{:>2} {played} {}{}  {platforms}",
-                i + 1,
+                "{rank:>2} {played} {}{}  {platforms}",
                 e.name,
                 " ".repeat(pad)
             )

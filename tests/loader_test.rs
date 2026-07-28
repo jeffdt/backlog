@@ -162,3 +162,38 @@ fn test_format_sync_age_days() {
     let days_ago = chrono::Utc::now() - chrono::Duration::days(5);
     assert_eq!(loader::format_sync_age(Some(days_ago)), "synced 5d ago");
 }
+
+#[test]
+fn dedupe_merges_exactly_the_names_queue_normalize_key_agrees_on() {
+    // Queue state is addressed by `queue::normalize_key`, so every library
+    // entry `dedupe` produces must correspond to exactly one queue key. If the
+    // two ever diverge, previously queued and played games become unreachable.
+    let names = [
+        "Tunic",
+        "  tunic",
+        "TUNIC ",
+        "Outer Wilds",
+        "outer  wilds",
+        "Café",
+    ];
+    for a in names {
+        for b in names {
+            let entries = loader::dedupe(vec![
+                Game {
+                    name: a.to_string(),
+                    platform: "steam".to_string(),
+                },
+                Game {
+                    name: b.to_string(),
+                    platform: "epic".to_string(),
+                },
+            ]);
+            let merged = entries.len() == 1;
+            let same_key = backlog::queue::normalize_key(a) == backlog::queue::normalize_key(b);
+            assert_eq!(
+                merged, same_key,
+                "dedupe and normalize_key disagree on {a:?} vs {b:?}"
+            );
+        }
+    }
+}

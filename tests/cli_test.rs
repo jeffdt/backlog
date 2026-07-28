@@ -93,6 +93,42 @@ fn queue_rows_mark_played_games_and_skip_missing_ones() {
 }
 
 #[test]
+fn queue_rows_keep_the_rank_gap_left_by_a_game_missing_from_the_library() {
+    let lib = library(&["Tunic", "Hades"]);
+    let mut q = Queue::default();
+    q.toggle_queued("Uninstalled Game");
+    q.toggle_queued("Tunic");
+    q.toggle_queued("Hades");
+
+    let output = output::format_queue_rows(&lib, &q);
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines[0].trim_start().starts_with("2 "),
+        "got {:?}",
+        lines[0]
+    );
+    assert!(lines[0].contains("Tunic"));
+    assert!(
+        lines[1].trim_start().starts_with("3 "),
+        "got {:?}",
+        lines[1]
+    );
+    assert!(lines[1].contains("Hades"));
+}
+
+#[test]
+fn rows_join_multiple_platform_labels() {
+    let mut lib = library(&["Tunic"]);
+    lib[0].platforms = vec!["epic".to_string(), "steam".to_string()];
+    let mut q = Queue::default();
+    q.toggle_queued("Tunic");
+
+    assert!(output::format_search_rows(&results(&lib), &q).ends_with("epic / steam"));
+    assert!(output::format_queue_rows(&lib, &q).ends_with("epic / steam"));
+}
+
+#[test]
 fn queue_rows_are_empty_when_nothing_is_queued() {
     let lib = library(&["Tunic"]);
     assert!(output::format_queue_rows(&lib, &Queue::default()).is_empty());
