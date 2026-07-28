@@ -122,12 +122,27 @@ impl App {
         self.sync_rx = None;
     }
 
-    /// The game under the cursor, resolved against the currently visible rows.
-    fn selected_game(&self) -> Option<String> {
+    /// The cursor position clamped to the currently visible rows, paired with
+    /// the game at that row. `None` when there are no visible rows.
+    fn selected_row(&self) -> Option<(usize, String)> {
         let filtered = self.filtered();
         let results = search::fuzzy_search(&self.input, &filtered);
-        let selected = self.selected.min(results.len().saturating_sub(1));
-        results.get(selected).map(|r| r.game.name.clone())
+        if results.is_empty() {
+            return None;
+        }
+        let clamped = self.selected.min(results.len() - 1);
+        results.get(clamped).map(|r| (clamped, r.game.name.clone()))
+    }
+
+    /// The game under the cursor, resolved against the currently visible rows.
+    ///
+    /// Mirrors `draw`'s guard: the blank default screen (empty query, `All`
+    /// filter) shows no rows, so it must not resolve to a game either.
+    fn selected_game(&self) -> Option<String> {
+        if self.input.is_empty() && self.filter == crate::queue::Filter::All {
+            return None;
+        }
+        self.selected_row().map(|(_, name)| name)
     }
 
     /// Persists the queue, surfacing a write failure in the status row rather
@@ -166,9 +181,10 @@ impl App {
         if self.filter != crate::queue::Filter::Queued {
             return;
         }
-        let Some(name) = self.selected_game() else {
+        let Some((clamped, name)) = self.selected_row() else {
             return;
         };
+        self.selected = clamped;
         let moved = if down {
             self.queue.move_down(&name)
         } else {
@@ -179,9 +195,9 @@ impl App {
         }
         if self.input.is_empty() {
             self.selected = if down {
-                self.selected.saturating_add(1)
+                clamped.saturating_add(1)
             } else {
-                self.selected.saturating_sub(1)
+                clamped.saturating_sub(1)
             };
         }
         self.persist_queue();
@@ -568,6 +584,30 @@ fn draw(f: &mut Frame, app: &App) {
 mod tests {
     use super::*;
     use crate::sync::{SyncReport, SyncStatus};
+    use tempfile::TempDir;
+
+    /// Builds an `App` over an in-memory library, with the queue file rooted
+    /// in a scratch directory so `persist_queue` never touches real state.
+    fn test_app(queue_dir: &TempDir, games: &[&str]) -> App {
+        let load_result = LoadResult {
+            games: games
+                .iter()
+                .map(|name| LibraryEntry {
+                    name: name.to_string(),
+                    platforms: vec!["steam".to_string()],
+                })
+                .collect(),
+            warnings: Vec::new(),
+            oldest_update: None,
+        };
+        App::new(
+            load_result,
+            queue_dir.path().to_path_buf(),
+            queue_dir.path().to_path_buf(),
+            queue_dir.path().join("config.json"),
+            queue_dir.path().join("queue.json"),
+        )
+    }
 
     fn ok(platform: &str, count: usize) -> SyncReport {
         SyncReport {
@@ -686,5 +726,46 @@ mod tests {
         assert_eq!(filter_chip(Filter::Queued), " » queued ");
         assert_eq!(filter_chip(Filter::Played), " ✓ played ");
         assert_eq!(filter_chip(Filter::Unplayed), " unplayed ");
+    }
+
+    #[test]
+    fn selected_game_is_none_on_the_blank_default_screen() {
+        let dir = TempDir::new().unwrap();
+        let app = test_app(&dir, &["Hollow Knight", "Hades"]);
+        assert_eq!(app.selected_game(), None);
+    }
+
+    #[test]
+    fn enter_on_the_blank_default_screen_does_not_queue_anything() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["Hollow Knight", "Hades"]);
+        app.toggle_queued();
+        assert!(app.queue.entries.is_empty());
+    }
+
+    #[test]
+    fn selected_game_resolves_once_input_or_filter_shows_rows() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["Hollow Knight", "Hades"]);
+        app.input = "hades".to_string();
+        assert_eq!(app.selected_game(), Some("Hades".to_string()));
+    }
+
+    #[test]
+    fn move_selected_follows_the_moved_game_even_when_the_cursor_overshot() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        app.queue.toggle_queued("A");
+        app.queue.toggle_queued("B");
+        app.queue.toggle_queued("C");
+        app.filter = crate::queue::Filter::Queued;
+        // Plain Down has no upper bound, so holding it past the end leaves
+        // `selected` far past the last row.
+        app.selected = 100;
+
+        app.move_selected(false);
+
+        assert_eq!(app.queue.rank("C"), Some(2));
+        assert_eq!(app.selected, 1, "cursor should self-heal onto C's new row");
     }
 }
