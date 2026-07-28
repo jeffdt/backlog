@@ -201,6 +201,14 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
                 (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                     app.start_sync();
                 }
+                (KeyCode::BackTab, _) => {
+                    app.filter = app.filter.prev();
+                    app.selected = 0;
+                }
+                (KeyCode::Tab, _) => {
+                    app.filter = app.filter.next();
+                    app.selected = 0;
+                }
                 (KeyCode::Char(c), _) => {
                     app.input.insert(app.cursor_pos, c);
                     app.cursor_pos += c.len_utf8();
@@ -255,6 +263,24 @@ fn marker_spans(state: crate::queue::GameState) -> Vec<Span<'static>> {
         Span::raw(" ")
     };
     vec![queued, played, Span::raw(" ")]
+}
+
+/// Renders the status-row filter chip, repeating the filter's row glyph so
+/// cycling filters teaches the marker vocabulary.
+fn filter_chip(filter: crate::queue::Filter) -> String {
+    match filter.glyph() {
+        Some(glyph) => format!(" {glyph} {} ", filter.label()),
+        None => format!(" {} ", filter.label()),
+    }
+}
+
+/// Background color for a filter's chip, matching its row glyph color.
+fn filter_chip_color(filter: crate::queue::Filter) -> Color {
+    match filter {
+        crate::queue::Filter::Queued => Color::Cyan,
+        crate::queue::Filter::Played => Color::Green,
+        crate::queue::Filter::All | crate::queue::Filter::Unplayed => Color::Gray,
+    }
 }
 
 fn platform_color(platform: &str) -> Color {
@@ -329,14 +355,22 @@ fn draw(f: &mut Frame, app: &App) {
     let cursor_y = chunks[0].y;
     f.set_cursor_position((cursor_x, cursor_y));
 
-    let status_text = match &app.sync_state {
-        SyncState::Idle => String::new(),
+    let hint = match &app.sync_state {
+        SyncState::Idle => "enter queue   ^p played   tab filter".to_string(),
         SyncState::Syncing => "syncing...".to_string(),
         SyncState::Done(reports) => format_sync_summary(reports, &app.sync_before_counts),
     };
-    let status_widget =
-        Paragraph::new(status_text.as_str()).style(Style::default().fg(Color::DarkGray));
-    f.render_widget(status_widget, chunks[2]);
+    let status_line = Line::from(vec![
+        Span::styled(
+            filter_chip(app.filter),
+            Style::default()
+                .fg(Color::Black)
+                .bg(filter_chip_color(app.filter)),
+        ),
+        Span::raw("  "),
+        Span::styled(hint, Style::default().fg(Color::DarkGray)),
+    ]);
+    f.render_widget(Paragraph::new(status_line), chunks[2]);
 
     // Only show results when the user has typed something, unless a queue
     // filter is narrowing the list on its own
@@ -394,8 +428,18 @@ fn draw(f: &mut Frame, app: &App) {
         let match_set: std::collections::HashSet<u32> =
             result.match_indices.iter().copied().collect();
 
+        let mut name_spans: Vec<Span> = Vec::new();
+        if app.filter == crate::queue::Filter::Queued
+            && let Some(rank) = app.queue.rank(&result.game.name)
+        {
+            name_spans.push(Span::styled(
+                format!("{rank:>2} "),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
         let state = app.queue.state(&result.game.name);
-        let mut name_spans: Vec<Span> = marker_spans(state);
+        name_spans.extend(marker_spans(state));
         let base_color = if state.played {
             Color::Gray
         } else {
@@ -552,5 +596,14 @@ mod tests {
         });
         assert_eq!(spans[0].style.fg, Some(Color::Cyan));
         assert_eq!(spans[1].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn filter_chip_repeats_the_row_glyph() {
+        use crate::queue::Filter;
+        assert_eq!(filter_chip(Filter::All), " all ");
+        assert_eq!(filter_chip(Filter::Queued), " » queued ");
+        assert_eq!(filter_chip(Filter::Played), " ✓ played ");
+        assert_eq!(filter_chip(Filter::Unplayed), " unplayed ");
     }
 }
