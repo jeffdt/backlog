@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod config;
 pub mod loader;
+pub mod queue;
 pub mod search;
 pub mod sources;
 pub mod sync;
