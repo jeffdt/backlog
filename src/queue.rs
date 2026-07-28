@@ -142,4 +142,69 @@ impl Queue {
             }),
         }
     }
+
+    /// Returns the 1-based rank of a queued game, or `None` if it is not queued.
+    pub fn rank(&self, name: &str) -> Option<usize> {
+        let key = normalize_key(name);
+        self.entries
+            .iter()
+            .filter(|e| e.queued)
+            .position(|e| e.key == key)
+            .map(|pos| pos + 1)
+    }
+
+    /// Returns the display names of queued games in rank order.
+    pub fn queued_names(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter(|e| e.queued)
+            .map(|e| e.name.as_str())
+            .collect()
+    }
+
+    /// Moves a queued game one rank later. Returns `false` if it is already last
+    /// or is not queued.
+    pub fn move_down(&mut self, name: &str) -> bool {
+        self.swap_with_neighbor(name, true)
+    }
+
+    /// Moves a queued game one rank earlier. Returns `false` if it is already
+    /// first or is not queued.
+    pub fn move_up(&mut self, name: &str) -> bool {
+        self.swap_with_neighbor(name, false)
+    }
+
+    /// Swaps a queued entry with the nearest queued entry after (or before) it.
+    ///
+    /// Played-only entries are skipped: they occupy positions in `entries` but
+    /// hold no rank, so swapping across them would leave rank order unchanged.
+    fn swap_with_neighbor(&mut self, name: &str, forward: bool) -> bool {
+        let key = normalize_key(name);
+        let Some(idx) = self.index_of(&key) else {
+            return false;
+        };
+        if !self.entries[idx].queued {
+            return false;
+        }
+        let neighbor = if forward {
+            self.entries
+                .iter()
+                .enumerate()
+                .skip(idx + 1)
+                .find(|(_, e)| e.queued)
+                .map(|(i, _)| i)
+        } else {
+            self.entries
+                .iter()
+                .enumerate()
+                .take(idx)
+                .rfind(|(_, e)| e.queued)
+                .map(|(i, _)| i)
+        };
+        let Some(neighbor) = neighbor else {
+            return false;
+        };
+        self.entries.swap(idx, neighbor);
+        true
+    }
 }

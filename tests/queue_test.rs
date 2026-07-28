@@ -124,3 +124,89 @@ fn toggling_both_flags_off_leaves_no_live_state() {
     q.toggle_queued("Tunic");
     assert_eq!(q.state("Tunic"), GameState::default());
 }
+
+fn queued(names: &[&str]) -> Queue {
+    let mut q = Queue::default();
+    for name in names {
+        q.toggle_queued(name);
+    }
+    q
+}
+
+#[test]
+fn rank_is_one_based_position_among_queued_entries() {
+    let mut q = queued(&["Disco Elysium", "Outer Wilds", "Tunic"]);
+    q.toggle_played("Pentiment");
+    assert_eq!(q.rank("Disco Elysium"), Some(1));
+    assert_eq!(q.rank("Outer Wilds"), Some(2));
+    assert_eq!(q.rank("tunic"), Some(3));
+    assert_eq!(q.rank("Pentiment"), None);
+    assert_eq!(q.rank("Not In Queue"), None);
+}
+
+#[test]
+fn newly_queued_game_takes_the_last_rank() {
+    let mut q = queued(&["Disco Elysium", "Outer Wilds"]);
+    q.toggle_queued("Tunic");
+    assert_eq!(
+        q.queued_names(),
+        vec!["Disco Elysium", "Outer Wilds", "Tunic"]
+    );
+}
+
+#[test]
+fn requeuing_a_played_game_sends_it_to_the_back() {
+    let mut q = queued(&["Disco Elysium", "Outer Wilds"]);
+    q.toggle_played("Disco Elysium");
+    q.toggle_queued("Disco Elysium");
+    assert_eq!(q.queued_names(), vec!["Outer Wilds"]);
+    q.toggle_queued("Disco Elysium");
+    assert_eq!(q.queued_names(), vec!["Outer Wilds", "Disco Elysium"]);
+}
+
+#[test]
+fn move_down_swaps_with_the_next_queued_game() {
+    let mut q = queued(&["Disco Elysium", "Outer Wilds", "Tunic"]);
+    assert!(q.move_down("Disco Elysium"));
+    assert_eq!(
+        q.queued_names(),
+        vec!["Outer Wilds", "Disco Elysium", "Tunic"]
+    );
+}
+
+#[test]
+fn move_up_swaps_with_the_previous_queued_game() {
+    let mut q = queued(&["Disco Elysium", "Outer Wilds", "Tunic"]);
+    assert!(q.move_up("Tunic"));
+    assert_eq!(
+        q.queued_names(),
+        vec!["Disco Elysium", "Tunic", "Outer Wilds"]
+    );
+}
+
+#[test]
+fn moves_are_no_ops_at_the_boundaries() {
+    let mut q = queued(&["Disco Elysium", "Outer Wilds"]);
+    assert!(!q.move_up("Disco Elysium"));
+    assert!(!q.move_down("Outer Wilds"));
+    assert_eq!(q.queued_names(), vec!["Disco Elysium", "Outer Wilds"]);
+}
+
+#[test]
+fn moves_are_no_ops_for_games_that_are_not_queued() {
+    let mut q = queued(&["Disco Elysium", "Outer Wilds"]);
+    q.toggle_played("Pentiment");
+    assert!(!q.move_up("Pentiment"));
+    assert!(!q.move_down("Pentiment"));
+    assert!(!q.move_up("Never Seen"));
+}
+
+#[test]
+fn moves_skip_over_played_only_entries() {
+    let mut q = Queue::default();
+    q.toggle_queued("Disco Elysium");
+    q.toggle_played("Pentiment");
+    q.toggle_queued("Outer Wilds");
+    assert!(q.move_down("Disco Elysium"));
+    assert_eq!(q.queued_names(), vec!["Outer Wilds", "Disco Elysium"]);
+}
