@@ -63,3 +63,22 @@ hand-edit never costs you the queue.
 | `Ctrl+J` / `Ctrl+K` (or `Shift+↓` / `Shift+↑`) | Move the selected game down / up in rank (queued filter only) |
 | `Ctrl+R` | Force-sync libraries |
 | `Esc` | Quit |
+
+## Development
+
+```sh
+cargo build
+cargo test
+cargo run
+```
+
+This repo also ships two Claude Code skills for working on it visually:
+`mockup`, for comparing ANSI mockups of a design change before
+implementing it, and `live-preview`, for popping the freshly built binary
+open in a real tmux window once a feature is done. Both come from the
+`tui-utils` plugin:
+
+```
+/plugin marketplace add jeffdt/tui-utils
+/plugin install tui-utils@tui-utils
+```
