@@ -15,6 +15,17 @@ prior Python tool (`own`); some structs note that they match "the Python
 version's JSON format exactly" for config/cache compatibility. Currently
 macOS / Apple Silicon focused.
 
+## Claude Code plugin
+
+Shared skills (`mockup`, `vhs-recording`, `cutting-a-release`, `live-preview`)
+come from the `tui-utils` plugin (github.com/jeffdt/tui-utils), not this
+repo. One-time per machine:
+
+```
+/plugin marketplace add jeffdt/tui-utils
+/plugin install tui-utils@tui-utils
+```
+
 ## Commands
 
 ```sh
