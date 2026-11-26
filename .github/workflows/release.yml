@@ -34,10 +34,10 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Stage binary
-        run: cp target/${{ matrix.target }}/release/backlog backlog-${{ matrix.target }}
+        run: cp target/${{ matrix.target }}/release/bouncer bouncer-${{ matrix.target }}
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
-          files: backlog-${{ matrix.target }}
+          files: bouncer-${{ matrix.target }}
           generate_release_notes: true

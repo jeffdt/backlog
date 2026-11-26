@@ -12,10 +12,10 @@ pub struct CacheFile {
     pub games: Vec<Game>,
 }
 
-/// Returns the default cache directory: `~/.cache/backlog`.
+/// Returns the default cache directory: `~/.cache/bouncer`.
 pub fn default_cache_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".cache").join("backlog")
+    PathBuf::from(home).join(".cache").join("bouncer")
 }
 
 /// Reads a cache file from disk, returning `None` if missing or malformed.

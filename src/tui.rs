@@ -253,7 +253,7 @@ pub fn run_with(
     }
 
     if load_result.games.is_empty() {
-        eprintln!("No games loaded. Run `backlog setup` to configure, then `backlog sync`.");
+        eprintln!("No games loaded. Run `bouncer setup` to configure, then `bouncer sync`.");
         return Ok(());
     }
 
@@ -446,7 +446,7 @@ fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
 
     let title = format!(
-        " backlog \u{2500}\u{2500} {} games ({}) ",
+        " bouncer \u{2500}\u{2500} {} games ({}) ",
         app.games.len(),
         app.sync_age,
     );

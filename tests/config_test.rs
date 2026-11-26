@@ -1,7 +1,7 @@
 use std::fs;
 use tempfile::TempDir;
 
-use backlog::config;
+use bouncer::config;
 
 #[test]
 fn test_load_config_returns_none_when_missing() {

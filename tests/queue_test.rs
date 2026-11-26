@@ -1,6 +1,6 @@
-use backlog::LibraryEntry;
-use backlog::queue::Filter;
-use backlog::queue::{self, GameState, Queue, QueueEntry};
+use bouncer::LibraryEntry;
+use bouncer::queue::Filter;
+use bouncer::queue::{self, GameState, Queue, QueueEntry};
 use tempfile::TempDir;
 
 fn entry(name: &str, queued: bool, played: bool) -> QueueEntry {
@@ -47,7 +47,7 @@ fn load_errors_when_the_file_cannot_be_read() {
 }
 
 #[test]
-fn load_refuses_a_file_written_by_a_newer_backlog() {
+fn load_refuses_a_file_written_by_a_newer_bouncer() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("queue.json");
     std::fs::write(

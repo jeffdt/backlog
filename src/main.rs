@@ -2,11 +2,11 @@ use std::io::{self, Write};
 
 use clap::{Parser, Subcommand};
 
-use backlog::{cache, config, loader, output, queue, search, sources, sync};
+use bouncer::{cache, config, loader, output, queue, search, sources, sync};
 
 #[derive(Parser)]
 #[command(
-    name = "backlog",
+    name = "bouncer",
     about = "Search and queue your game library across Steam, Epic, GOG, and Amazon"
 )]
 struct Cli {
@@ -64,7 +64,7 @@ fn run_search(query: &str) {
     }
 
     if result.games.is_empty() {
-        eprintln!("No games loaded. Run `backlog sync` first.");
+        eprintln!("No games loaded. Run `bouncer sync` first.");
         return;
     }
 
@@ -88,7 +88,7 @@ fn run_queue() {
     }
 
     if result.games.is_empty() {
-        eprintln!("No games loaded. Run `backlog sync` first.");
+        eprintln!("No games loaded. Run `bouncer sync` first.");
         return;
     }
 
@@ -192,7 +192,7 @@ fn run_tui() {
 
     let queue_path = queue::default_queue_path();
     if let Err(e) =
-        backlog::tui::run_with(load_result, cache_dir, heroic_dir, config_path, queue_path)
+        bouncer::tui::run_with(load_result, cache_dir, heroic_dir, config_path, queue_path)
     {
         eprintln!("Error: {e}");
         std::process::exit(1);

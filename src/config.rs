@@ -9,13 +9,13 @@ pub struct Config {
     pub steam_id: String,
 }
 
-/// Returns `~/.config/backlog/config.json`, falling back to
-/// `./.config/backlog/config.json` if `$HOME` is unset.
+/// Returns `~/.config/bouncer/config.json`, falling back to
+/// `./.config/bouncer/config.json` if `$HOME` is unset.
 pub fn default_config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
         .join(".config")
-        .join("backlog")
+        .join("bouncer")
         .join("config.json")
 }
 

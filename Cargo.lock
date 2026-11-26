@@ -113,21 +113,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "backlog"
-version = "0.2.1"
-dependencies = [
- "chrono",
- "clap",
- "crossterm",
- "nucleo-matcher",
- "ratatui",
- "serde",
- "serde_json",
- "tempfile",
- "ureq",
-]
-
-[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -167,6 +152,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "bouncer"
+version = "0.2.1"
+dependencies = [
+ "chrono",
+ "clap",
+ "crossterm",
+ "nucleo-matcher",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
 ]
 
 [[package]]

@@ -73,7 +73,7 @@ pub fn sync_steam(config_path: &Path, cache_dir: &Path) -> SyncReport {
         return SyncReport {
             platform: "steam".to_string(),
             game_count: 0,
-            status: SyncStatus::Skipped("no config found, run `backlog setup` first".to_string()),
+            status: SyncStatus::Skipped("no config found, run `bouncer setup` first".to_string()),
         };
     };
     match steam::fetch_steam_library(&cfg.steam_api_key, &cfg.steam_id) {
