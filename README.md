@@ -1,8 +1,9 @@
 # bouncer
 
-Fuzzy-search your game library across Steam, Epic, GOG, and Amazon from the
-terminal. Type a few letters and it finds the game, no matter which launcher
-owns it, then queue up what you mean to play next.
+Wrangles your sprawling game library and keeps your shopping sprees in check.
+
+Type a few letters and it finds the game across Steam, Epic, GOG, and Amazon,
+no matter which launcher owns it, then queue up what you mean to play next.
 
 ![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust&logoColor=white)
 ![TUI](https://img.shields.io/badge/TUI-ratatui-1f6feb)
