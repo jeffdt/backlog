@@ -1,4 +1,4 @@
-use backlog::{LibraryEntry, search};
+use bouncer::{LibraryEntry, search};
 
 fn sample_library() -> Vec<LibraryEntry> {
     vec![

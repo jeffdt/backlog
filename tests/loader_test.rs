@@ -1,4 +1,4 @@
-use backlog::{Game, cache, loader};
+use bouncer::{Game, cache, loader};
 use tempfile::TempDir;
 
 fn setup_caches(dir: &TempDir) {
@@ -189,7 +189,7 @@ fn dedupe_merges_exactly_the_names_queue_normalize_key_agrees_on() {
                 },
             ]);
             let merged = entries.len() == 1;
-            let same_key = backlog::queue::normalize_key(a) == backlog::queue::normalize_key(b);
+            let same_key = bouncer::queue::normalize_key(a) == bouncer::queue::normalize_key(b);
             assert_eq!(
                 merged, same_key,
                 "dedupe and normalize_key disagree on {a:?} vs {b:?}"

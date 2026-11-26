@@ -1,4 +1,4 @@
-use backlog::sources::heroic;
+use bouncer::sources::heroic;
 use std::fs;
 use tempfile::TempDir;
 

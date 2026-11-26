@@ -54,13 +54,13 @@ pub fn normalize_key(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
-/// Returns the default queue file path: `~/.local/share/backlog/queue.json`.
+/// Returns the default queue file path: `~/.local/share/bouncer/queue.json`.
 pub fn default_queue_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
         .join(".local")
         .join("share")
-        .join("backlog")
+        .join("bouncer")
         .join("queue.json")
 }
 
@@ -82,7 +82,7 @@ pub fn load(path: &Path) -> Result<Queue, String> {
         .map_err(|e| format!("cannot parse queue file: {e} ({})", path.display()))?;
     if queue.version > QUEUE_VERSION {
         return Err(format!(
-            "queue file is schema version {} but this backlog only understands \
+            "queue file is schema version {} but this bouncer only understands \
              {QUEUE_VERSION}; refusing to overwrite {}",
             queue.version,
             path.display()

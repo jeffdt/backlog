@@ -1,4 +1,4 @@
-# backlog
+# bouncer
 
 Fuzzy-search your game library across Steam, Epic, GOG, and Amazon from the
 terminal. Type a few letters and it finds the game, no matter which launcher
@@ -14,32 +14,32 @@ owns it, then queue up what you mean to play next.
 
 ```sh
 cargo install --path .
-backlog setup
+bouncer setup
 ```
 
 The `setup` command prompts for your
 [Steam API key](https://steamcommunity.com/dev/apikey) and your Steam profile
 URL or vanity name (e.g. `https://steamcommunity.com/id/yourname` or just
 `yourname`). It resolves the vanity name to a Steam ID automatically and stores
-credentials in `~/.config/backlog/config.json`.
+credentials in `~/.config/bouncer/config.json`.
 
 ## Usage
 
 ```sh
 # One-shot search
-backlog "hollow knight"
+bouncer "hollow knight"
 
 # Sync library caches from all sources
-backlog sync
+bouncer sync
 
 # Print your ranked queue
-backlog queue
+bouncer queue
 
 # Interactive TUI
-backlog
+bouncer
 
 # Print the installed version
-backlog --version
+bouncer --version
 ```
 
 ## Sources
@@ -51,8 +51,8 @@ backlog --version
 
 Mark games as queued (want to play soon) or played from the TUI, then
 filter and reorder the list. Queue state lives in
-`~/.local/share/backlog/queue.json`. If that file can't be read or parsed,
-backlog says so and stops saving rather than overwriting it, so a bad
+`~/.local/share/bouncer/queue.json`. If that file can't be read or parsed,
+bouncer says so and stops saving rather than overwriting it, so a bad
 hand-edit never costs you the queue.
 
 | Key | Action |

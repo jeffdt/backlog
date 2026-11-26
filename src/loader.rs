@@ -39,7 +39,7 @@ pub fn load_all_games(cache_dir: &Path) -> LoadResult {
         if cache::is_stale(&data.last_updated, 7) {
             let date = data.last_updated.get(..10).unwrap_or(&data.last_updated);
             warnings.push(format!(
-                "{platform} cache is stale (last updated: {date}). Run `backlog sync` to refresh."
+                "{platform} cache is stale (last updated: {date}). Run `bouncer sync` to refresh."
             ));
         }
 

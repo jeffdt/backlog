@@ -1,4 +1,4 @@
-use backlog::sources::steam;
+use bouncer::sources::steam;
 
 #[test]
 fn test_parse_steam_response_extracts_games() {

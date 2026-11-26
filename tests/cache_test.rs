@@ -1,4 +1,4 @@
-use backlog::{Game, cache};
+use bouncer::{Game, cache};
 use tempfile::TempDir;
 
 #[test]

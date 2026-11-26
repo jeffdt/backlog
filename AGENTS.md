@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Orientation for agents and humans working on backlog. This file holds durable
+Orientation for agents and humans working on bouncer. This file holds durable
 intent and conventions, not a file-by-file map (that goes stale). Read the
 source for current structure.
 
@@ -9,7 +9,7 @@ a GitHub issue. Look it up with `gh issue view <number>`.
 
 ## What this is
 
-`backlog` is a terminal tool that fuzzy-searches a user's game library
+`bouncer` is a terminal tool that fuzzy-searches a user's game library
 aggregated across Steam, Epic, GOG, and Amazon. It is a Rust rewrite of a
 prior Python tool (`own`); some structs note that they match "the Python
 version's JSON format exactly" for config/cache compatibility. Currently
@@ -41,7 +41,7 @@ cargo run -- sync                     # refresh all caches
 cargo run -- setup                    # configure Steam credentials
 cargo run -- queue                    # print the ranked queue
 cargo run                             # launch interactive TUI
-cargo install --path .                # install the `backlog` binary
+cargo install --path .                # install the `bouncer` binary
 ```
 
 Edition is **2024** (requires a recent stable toolchain).
@@ -57,7 +57,7 @@ Data flows in two stages, decoupled by an on-disk cache so that searching
 never hits the network:
 
 1. **Sync** (`sync.rs`) pulls from sources and writes one JSON cache file per
-   platform into `~/.cache/backlog/<platform>.json`.
+   platform into `~/.cache/bouncer/<platform>.json`.
 2. **Load + search** (`loader.rs` + `search.rs`) reads all cache files, merges
    them, and fuzzy-matches. The TUI and one-shot `search` both consume this.
 
@@ -77,9 +77,9 @@ Each source converts an external format into `Vec<Game>`. Two kinds:
   older than **7 days** are flagged stale by the loader (surfaced as
   warnings, not errors). Reads of missing/malformed files return `None` and
   are silently skipped, never panic.
-- Config lives at `~/.config/backlog/config.json` (`steam_api_key`,
+- Config lives at `~/.config/bouncer/config.json` (`steam_api_key`,
   `steam_id`).
-- Queue state lives at `~/.local/share/backlog/queue.json` (schema
+- Queue state lives at `~/.local/share/bouncer/queue.json` (schema
   `version` 1). Entry array order is the queue rank. Writes are atomic
   (temp file plus rename) and happen synchronously on every mutation,
   since unlike a platform cache the queue can't be regenerated from an
