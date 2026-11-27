@@ -37,6 +37,8 @@ cargo clippy --all-targets       # lint
 cargo fmt                        # format
 
 cargo run -- "hollow knight"          # one-shot search
+cargo run -- search "queue"           # explicit search (escapes subcommand names)
+cargo run -- price "hades ii"         # ITAD prices for a title
 cargo run -- sync                     # refresh all caches
 cargo run -- setup                    # configure Steam credentials
 cargo run -- queue                    # print the ranked queue
@@ -72,13 +74,17 @@ Each source converts an external format into `Vec<Game>`. Two kinds:
   files (`legendary_library.json` = Epic, `gog_library.json` = GOG with
   `gog-redist` filtered out, `nile_library.json` = Amazon). No network.
 
+### Prices (`itad.rs`)
+Thin IsThereAnyDeal client, called only by `bouncer price`. It keeps no cache
+by design: prices go stale fast, so every run asks ITAD again.
+
 ### Cache + config (`cache.rs`, `config.rs`)
 - Cache files carry `last_updated` (RFC3339), `source`, and `games`. Caches
   older than **7 days** are flagged stale by the loader (surfaced as
   warnings, not errors). Reads of missing/malformed files return `None` and
   are silently skipped, never panic.
 - Config lives at `~/.config/bouncer/config.json` (`steam_api_key`,
-  `steam_id`).
+  `steam_id`, and the optional `itad_api_key`).
 - Queue state lives at `~/.local/share/bouncer/queue.json` (schema
   `version` 1). Entry array order is the queue rank. Writes are atomic
   (temp file plus rename) and happen synchronously on every mutation,

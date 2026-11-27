@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use clap::{Parser, Subcommand};
 
-use bouncer::{cache, config, loader, output, queue, search, sources, sync};
+use bouncer::{cache, config, itad, loader, output, queue, search, sources, sync};
 
 #[derive(Parser)]
 #[command(
@@ -25,13 +25,48 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Search your library (same as `bouncer <query>`)
+    Search {
+        /// Game name to search for
+        query: String,
+    },
     /// Refresh caches from sources
     Sync,
-    /// Configure Steam API credentials
+    /// Configure Steam and IsThereAnyDeal API credentials
     Setup,
     /// Print the ranked queue
     Queue,
+    /// Check prices on IsThereAnyDeal
+    #[command(long_about = PRICE_LONG_ABOUT)]
+    Price {
+        /// Print results as JSON
+        #[arg(long)]
+        json: bool,
+        /// Game titles, Steam store URLs, Steam app IDs, or IsThereAnyDeal game IDs
+        #[arg(required = true)]
+        inputs: Vec<String>,
+    },
 }
+
+const PRICE_LONG_ABOUT: &str = r#"Look up current and historical prices on IsThereAnyDeal.
+
+Each input is a game title, a Steam store URL, a Steam app ID, or an
+IsThereAnyDeal game ID. Titles that match exactly print one row; titles
+that don't print up to 5 priced candidates, so pick the one you meant.
+
+Columns: Steam's current price, the best current price across stores
+(with the store, which may be a key reseller or another launcher), and
+the all-time low (with store and date).
+
+Checking a Steam cart:
+  1. For each game, run `bouncer search "<title>"` to see if you already own it.
+     A match on any platform, Steam included, means you may not need it.
+  2. Run one `bouncer price "<title>" "<title>" ...` for the rest.
+  For bundles that "include 1 item", price the included game, and compare
+  against the cart price: Steam's complete-the-set discount is not in
+  IsThereAnyDeal's Steam price.
+
+Exits 1 if any input could not be found."#;
 
 fn main() {
     let cli = Cli::parse();
@@ -42,9 +77,11 @@ fn main() {
     }
 
     match cli.command {
+        Some(Commands::Search { query }) => run_search(&query),
         Some(Commands::Setup) => run_setup(),
         Some(Commands::Sync) => run_sync(),
         Some(Commands::Queue) => run_queue(),
+        Some(Commands::Price { json, inputs }) => run_price(&inputs, json),
         None => {
             if let Some(query) = cli.query {
                 run_search(&query);
@@ -102,6 +139,43 @@ fn run_queue() {
     writeln!(io::stdout(), "{rows}").ok();
 }
 
+fn run_price(inputs: &[String], json: bool) {
+    if inputs.iter().any(|i| i.trim().is_empty()) {
+        eprintln!("Error: empty input");
+        std::process::exit(1);
+    }
+    let key = config::load_config(&config::default_config_path())
+        .and_then(|c| c.itad_api_key)
+        .filter(|k| !k.is_empty());
+    let Some(key) = key else {
+        eprintln!("No IsThereAnyDeal API key. Run `bouncer setup` to add one.");
+        std::process::exit(1);
+    };
+    let groups = itad::check_prices(&key, inputs).unwrap_or_else(|e| {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    });
+
+    if json {
+        let text = serde_json::to_string_pretty(&groups).expect("price groups serialize");
+        writeln!(io::stdout(), "{text}").ok();
+    } else {
+        let table = output::format_price_groups(&groups);
+        if !table.is_empty() {
+            writeln!(io::stdout(), "{table}").ok();
+        }
+    }
+
+    let mut missing = false;
+    for g in groups.iter().filter(|g| g.kind == itad::MatchKind::None) {
+        eprintln!("not found: {}", g.input);
+        missing = true;
+    }
+    if missing {
+        std::process::exit(1);
+    }
+}
+
 /// Loads queue state for a read-only command, warning and continuing with an
 /// empty queue when the file cannot be read.
 fn load_queue_or_warn() -> queue::Queue {
@@ -137,6 +211,7 @@ fn run_sync() {
 
 fn run_setup() {
     let config_path = config::default_config_path();
+    let existing_itad_key = config::load_config(&config_path).and_then(|c| c.itad_api_key);
     eprintln!("Steam API setup");
     eprintln!("  Get your API key at: https://steamcommunity.com/dev/apikey");
 
@@ -157,9 +232,22 @@ fn run_setup() {
         }
     };
 
+    let itad_prompt = if existing_itad_key.is_some() {
+        "  IsThereAnyDeal API key (Enter to keep current): "
+    } else {
+        "  IsThereAnyDeal API key (Enter to skip, get one at https://isthereanydeal.com/apps/my/): "
+    };
+    let itad_input = prompt(itad_prompt);
+    let itad_api_key = if itad_input.is_empty() {
+        existing_itad_key
+    } else {
+        Some(itad_input)
+    };
+
     let cfg = config::Config {
         steam_api_key: api_key,
         steam_id,
+        itad_api_key,
     };
     config::save_config(&config_path, &cfg).expect("Failed to save config");
     eprintln!("Config saved to {}", config_path.display());

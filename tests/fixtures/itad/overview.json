@@ -1,0 +1,122 @@
+{
+  "prices": [
+    {
+      "id": "018d937f-6ee2-70f6-940c-6212ac74369e",
+      "current": {
+        "shop": {
+          "id": 20,
+          "name": "GameBillet"
+        },
+        "price": {
+          "amount": 6.14,
+          "amountInt": 614,
+          "currency": "USD"
+        },
+        "regular": {
+          "amount": 29.99,
+          "amountInt": 2999,
+          "currency": "USD"
+        },
+        "cut": 80,
+        "voucher": null,
+        "flag": "S",
+        "drm": [
+          {
+            "id": 61,
+            "name": "Steam"
+          }
+        ],
+        "platforms": [
+          {
+            "id": 1,
+            "name": "Windows"
+          }
+        ],
+        "timestamp": "2026-11-26T22:25:31+01:00",
+        "expiry": null,
+        "url": "https://itad.link/018d9386-320f-731e-bc09-c48c353ccab7/?app=sg4bqb"
+      },
+      "lowest": {
+        "shop": {
+          "id": 68,
+          "name": "Gamer Thor"
+        },
+        "price": {
+          "amount": 1.99,
+          "amountInt": 199,
+          "currency": "USD"
+        },
+        "regular": {
+          "amount": 1.99,
+          "amountInt": 199,
+          "currency": "USD"
+        },
+        "cut": 0,
+        "timestamp": "2025-01-04T19:07:28+01:00"
+      },
+      "bundled": 1,
+      "urls": {
+        "game": "https://isthereanydeal.com/game/id:018d937f-6ee2-70f6-940c-6212ac74369e/"
+      }
+    },
+    {
+      "id": "018d937f-6ee3-738a-b578-ddd7e9a0d24d",
+      "current": {
+        "shop": {
+          "id": 61,
+          "name": "Steam"
+        },
+        "price": {
+          "amount": 20.99,
+          "amountInt": 2099,
+          "currency": "USD"
+        },
+        "regular": {
+          "amount": 29.99,
+          "amountInt": 2999,
+          "currency": "USD"
+        },
+        "cut": 30,
+        "voucher": null,
+        "flag": "H",
+        "drm": [],
+        "platforms": [
+          {
+            "id": 1,
+            "name": "Windows"
+          },
+          {
+            "id": 2,
+            "name": "Mac"
+          }
+        ],
+        "timestamp": "2026-11-24T19:17:46+01:00",
+        "expiry": "2026-12-01T19:00:00+01:00",
+        "url": "https://itad.link/018f4ed9-4868-701f-a1c9-ff248439e1c8/?app=sg4bqb"
+      },
+      "lowest": {
+        "shop": {
+          "id": 61,
+          "name": "Steam"
+        },
+        "price": {
+          "amount": 20.99,
+          "amountInt": 2099,
+          "currency": "USD"
+        },
+        "regular": {
+          "amount": 29.99,
+          "amountInt": 2999,
+          "currency": "USD"
+        },
+        "cut": 30,
+        "timestamp": "2026-06-25T19:56:59+02:00"
+      },
+      "bundled": 0,
+      "urls": {
+        "game": "https://isthereanydeal.com/game/id:018d937f-6ee3-738a-b578-ddd7e9a0d24d/"
+      }
+    }
+  ],
+  "bundles": []
+}

@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     pub steam_api_key: String,
     pub steam_id: String,
+    /// Optional IsThereAnyDeal API key; absent from the file when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub itad_api_key: Option<String>,
 }
 
 /// Returns `~/.config/bouncer/config.json`, falling back to

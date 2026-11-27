@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod config;
+pub mod itad;
 pub mod loader;
 pub mod output;
 pub mod queue;

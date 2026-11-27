@@ -158,3 +158,51 @@ fn version_flag_prints_the_bare_package_version() {
         );
     }
 }
+
+#[test]
+fn price_without_key_exits_with_setup_hint() {
+    let home = tempfile::TempDir::new().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_bouncer"))
+        .env("HOME", home.path())
+        .args(["price", "Hades"])
+        .output()
+        .expect("failed to run the bouncer binary");
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("bouncer setup"));
+}
+
+#[test]
+fn price_rejects_blank_input_before_any_network_call() {
+    let home = tempfile::TempDir::new().unwrap();
+    let config_dir = home.path().join(".config/bouncer");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.json"),
+        r#"{"steam_api_key": "k", "steam_id": "1", "itad_api_key": "dummy"}"#,
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_bouncer"))
+        .env("HOME", home.path())
+        .args(["price", "  "])
+        .output()
+        .expect("failed to run the bouncer binary");
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("empty input"));
+}
+
+/// `search` is the explicit form of the bare query, so a title that collides
+/// with a subcommand name can still be searched.
+#[test]
+fn search_subcommand_searches_even_when_the_query_is_a_command_name() {
+    let home = tempfile::TempDir::new().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_bouncer"))
+        .env("HOME", home.path())
+        .args(["search", "price"])
+        .output()
+        .expect("failed to run the bouncer binary");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("No games loaded"), "stderr: {stderr}");
+}
