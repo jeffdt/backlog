@@ -10,32 +10,34 @@ fn fixture(text: &str) -> Value {
 const BLASPHEMOUS: &str = "018d937f-6ee2-70f6-940c-6212ac74369e";
 
 #[test]
-fn classify_detects_steam_urls_and_app_ids() {
-    assert_eq!(
-        classify("https://store.steampowered.com/app/1145350/Hades_II/"),
-        Input::SteamApp(1145350)
-    );
-    assert_eq!(classify("1145350"), Input::SteamApp(1145350));
-}
-
-#[test]
-fn classify_detects_itad_ids() {
-    assert_eq!(classify(HADES), Input::ItadId(HADES.to_string()));
-}
-
-#[test]
-fn classify_keeps_punctuated_titles_verbatim() {
-    for t in [
-        "Thank Goodness You're Here!",
-        "Shadow Gambit: The Cursed Crew",
-        "STAR WARS™ Jedi",
+fn classify_recognizes_each_input_kind() {
+    let app = Input::SteamApp(1145350);
+    let title = |t: &str| Input::Title(t.to_string());
+    for (input, want) in [
+        (
+            "https://store.steampowered.com/app/1145350/Hades_II/",
+            app.clone(),
+        ),
+        (
+            "http://store.steampowered.com/app/1145350?l=en",
+            app.clone(),
+        ),
+        ("1145350", app),
+        (HADES, Input::ItadId(HADES.to_string())),
+        (
+            "Thank Goodness You're Here!",
+            title("Thank Goodness You're Here!"),
+        ),
+        (
+            "Shadow Gambit: The Cursed Crew",
+            title("Shadow Gambit: The Cursed Crew"),
+        ),
+        ("STAR WARS™ Jedi", title("STAR WARS™ Jedi")),
+        ("  Hades II ", title("Hades II")),
+        ("99999999999999999999999", title("99999999999999999999999")),
     ] {
-        assert_eq!(classify(t), Input::Title(t.to_string()));
+        assert_eq!(classify(input), want, "input: {input:?}");
     }
-    assert_eq!(
-        classify("  Hades II "),
-        Input::Title("Hades II".to_string())
-    );
 }
 
 #[test]
@@ -56,12 +58,6 @@ fn parse_search_returns_candidates_in_order() {
     assert_eq!(refs[0].title, "Hades II");
     assert_eq!(refs[0].kind, "game");
     assert_eq!(refs[3].kind, "package");
-}
-
-#[test]
-fn parse_info_reads_title() {
-    let r = parse_info(&fixture(include_str!("fixtures/itad/info.json"))).unwrap();
-    assert_eq!((r.title.as_str(), r.kind.as_str()), ("Hades II", "game"));
 }
 
 #[test]

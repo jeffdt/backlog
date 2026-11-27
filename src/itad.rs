@@ -107,8 +107,7 @@ pub fn classify(input: &str) -> Input {
     }
     // shortcut: a game titled only with digits (e.g. "140") is read as an app ID;
     // pass its store URL or ITAD ID instead.
-    if !s.is_empty()
-        && s.bytes().all(|b| b.is_ascii_digit())
+    if s.bytes().all(|b| b.is_ascii_digit())
         && let Ok(id) = s.parse()
     {
         return Input::SteamApp(id);
@@ -138,7 +137,8 @@ fn cut(v: &Value) -> Option<u32> {
     u32::try_from(v.get("cut")?.as_u64()?).ok()
 }
 
-fn game_ref(v: &Value) -> Option<GameRef> {
+/// Parses a game info response (or one search result); a missing type reads as "unknown".
+pub fn parse_info(v: &Value) -> Option<GameRef> {
     Some(GameRef {
         id: str_of(v, "id")?,
         title: str_of(v, "title")?,
@@ -160,13 +160,8 @@ pub fn parse_lookup(v: &Value) -> HashMap<String, Option<String>> {
 /// Parses a search response into candidates, in ITAD's order.
 pub fn parse_search(v: &Value) -> Vec<GameRef> {
     v.as_array()
-        .map(|a| a.iter().filter_map(game_ref).collect())
+        .map(|a| a.iter().filter_map(parse_info).collect())
         .unwrap_or_default()
-}
-
-/// Parses a game info response.
-pub fn parse_info(v: &Value) -> Option<GameRef> {
-    game_ref(v)
 }
 
 fn best_price(v: &Value) -> Option<BestPrice> {
@@ -258,56 +253,62 @@ pub fn assemble(
         .collect()
 }
 
-fn read_json(mut response: ureq::http::Response<ureq::Body>) -> Result<Value, String> {
-    let text = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| format!("ITAD request failed: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("ITAD request failed: bad response: {e}"))
-}
-
-/// GETs JSON, returning `None` when the server answers 404.
-fn get_json_or_missing(
+/// Sends one ITAD request (a POST when `body` is given), returning `None` on 404.
+fn call(
     api_key: &str,
     path: &str,
     query: &[(&str, &str)],
+    body: Option<&[String]>,
 ) -> Result<Option<Value>, String> {
-    let mut req = ureq::get(format!("{API_BASE}{path}"))
-        .header("User-Agent", USER_AGENT)
-        .query("key", api_key);
-    for (k, v) in query {
-        req = req.query(*k, *v);
-    }
-    match req.call() {
-        Ok(response) => read_json(response).map(Some),
-        Err(ureq::Error::StatusCode(404)) => Ok(None),
-        Err(e) => Err(format!("ITAD request failed: {e}")),
-    }
+    let fail = |e: &dyn std::fmt::Display| format!("ITAD request failed: {e}");
+    let url = format!("{API_BASE}{path}");
+    let result = match body {
+        None => ureq::get(url)
+            .header("User-Agent", USER_AGENT)
+            .query("key", api_key)
+            .query_pairs(query.iter().copied())
+            .call(),
+        Some(body) => ureq::post(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Content-Type", "application/json")
+            .query("key", api_key)
+            .query_pairs(query.iter().copied())
+            .send(serde_json::to_string(body).map_err(|e| fail(&e))?),
+    };
+    let mut response = match result {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(404)) => return Ok(None),
+        Err(e) => return Err(fail(&e)),
+    };
+    let text = response.body_mut().read_to_string().map_err(|e| fail(&e))?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| fail(&format!("bad response: {e}")))
 }
 
-fn get_json(api_key: &str, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
-    get_json_or_missing(api_key, path, query)?
+/// Like [`call`], but a 404 is an error.
+fn call_found(
+    api_key: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    body: Option<&[String]>,
+) -> Result<Value, String> {
+    call(api_key, path, query, body)?
         .ok_or_else(|| format!("ITAD request failed: {}", ureq::Error::StatusCode(404)))
 }
 
-fn post_json(
+/// POSTs a batch and parses the response, skipping the request when `body` is empty.
+fn post_batch<T: Default>(
     api_key: &str,
     path: &str,
     query: &[(&str, &str)],
     body: &[String],
-) -> Result<Value, String> {
-    let mut req = ureq::post(format!("{API_BASE}{path}"))
-        .header("User-Agent", USER_AGENT)
-        .header("Content-Type", "application/json")
-        .query("key", api_key);
-    for (k, v) in query {
-        req = req.query(*k, *v);
+    parse: impl Fn(&Value) -> T,
+) -> Result<T, String> {
+    if body.is_empty() {
+        return Ok(T::default());
     }
-    let body = serde_json::to_string(body).map_err(|e| format!("ITAD request failed: {e}"))?;
-    read_json(
-        req.send(body)
-            .map_err(|e| format!("ITAD request failed: {e}"))?,
-    )
+    Ok(parse(&call_found(api_key, path, query, Some(body))?))
 }
 
 fn distinct(items: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -321,111 +322,81 @@ fn distinct(items: impl IntoIterator<Item = String>) -> Vec<String> {
 /// Resolves every input against ITAD and attaches Steam, best, and all-time-low
 /// prices, one group per input in input order.
 pub fn check_prices(api_key: &str, inputs: &[String]) -> Result<Vec<PriceGroup>, String> {
-    let classified: Vec<(String, Input)> = inputs
-        .iter()
-        .map(|raw| (raw.clone(), classify(raw)))
-        .collect();
+    let classified: Vec<Input> = inputs.iter().map(|raw| classify(raw)).collect();
 
-    let titles = distinct(classified.iter().filter_map(|(_, i)| match i {
+    let titles = distinct(classified.iter().filter_map(|i| match i {
         Input::Title(t) => Some(t.clone()),
         _ => None,
     }));
-    let apps = distinct(classified.iter().filter_map(|(_, i)| match i {
+    let apps = distinct(classified.iter().filter_map(|i| match i {
         Input::SteamApp(id) => Some(format!("app/{id}")),
         _ => None,
     }));
-    let title_ids = if titles.is_empty() {
-        HashMap::new()
-    } else {
-        parse_lookup(&post_json(api_key, "/lookup/id/title/v1", &[], &titles)?)
-    };
-    let app_ids = if apps.is_empty() {
-        HashMap::new()
-    } else {
-        parse_lookup(&post_json(
-            api_key,
-            &format!("/lookup/id/shop/{STEAM_SHOP_ID}/v1"),
-            &[],
-            &apps,
-        )?)
-    };
+    let title_ids = post_batch(api_key, "/lookup/id/title/v1", &[], &titles, parse_lookup)?;
+    let shop_path = format!("/lookup/id/shop/{STEAM_SHOP_ID}/v1");
+    let app_ids = post_batch(api_key, &shop_path, &[], &apps, parse_lookup)?;
 
-    // A 404 from info makes that input unmatched; other failures abort the run.
-    let mut infos: HashMap<String, Option<GameRef>> = HashMap::new();
-    let mut searches: HashMap<String, Vec<GameRef>> = HashMap::new();
-    let mut resolved = Vec::new();
-    for (input, class) in classified {
-        let hit = match &class {
+    let hits: Vec<Option<String>> = classified
+        .iter()
+        .map(|i| match i {
             Input::Title(t) => title_ids.get(t).cloned().flatten(),
             Input::SteamApp(id) => app_ids.get(&format!("app/{id}")).cloned().flatten(),
             Input::ItadId(id) => Some(id.clone()),
-        };
-        let entry = match hit {
-            Some(id) => {
-                let info = match infos.get(&id) {
-                    Some(cached) => cached.clone(),
-                    None => {
-                        let fetched =
-                            get_json_or_missing(api_key, "/games/info/v2", &[("id", &id)])?
-                                .and_then(|v| parse_info(&v));
-                        infos.insert(id.clone(), fetched.clone());
-                        fetched
-                    }
-                };
-                match info {
-                    Some(r) => (input, MatchKind::Exact, vec![r]),
-                    None => (input, MatchKind::None, vec![]),
-                }
-            }
-            None => match class {
-                Input::Title(t) => {
-                    let found = match searches.get(&t) {
-                        Some(cached) => cached.clone(),
-                        None => {
-                            let fetched = parse_search(&get_json(
-                                api_key,
-                                "/games/search/v1",
-                                &[("title", &t), ("results", "5")],
-                            )?);
-                            searches.insert(t.clone(), fetched.clone());
-                            fetched
-                        }
-                    };
-                    if found.is_empty() {
-                        (input, MatchKind::None, found)
-                    } else {
-                        (input, MatchKind::Candidates, found)
-                    }
-                }
-                _ => (input, MatchKind::None, vec![]),
-            },
-        };
-        resolved.push(entry);
+        })
+        .collect();
+
+    // A 404 from info makes that input unmatched; other failures abort the run.
+    let mut infos = HashMap::new();
+    for id in distinct(hits.iter().flatten().cloned()) {
+        let info = call(api_key, "/games/info/v2", &[("id", &id)], None)?;
+        infos.insert(id, info.as_ref().and_then(parse_info));
     }
+    let misses = classified.iter().zip(&hits).filter_map(|pair| match pair {
+        (Input::Title(t), None) => Some(t.clone()),
+        _ => None,
+    });
+    let mut searches = HashMap::new();
+    for title in distinct(misses) {
+        let query = [("title", title.as_str()), ("results", "5")];
+        let found = parse_search(&call_found(api_key, "/games/search/v1", &query, None)?);
+        searches.insert(title, found);
+    }
+
+    let resolved: Vec<(String, MatchKind, Vec<GameRef>)> = inputs
+        .iter()
+        .zip(classified)
+        .zip(hits)
+        .map(|((input, class), hit)| {
+            let (kind, refs) = match (hit, class) {
+                (Some(id), _) => match infos[&id].clone() {
+                    Some(r) => (MatchKind::Exact, vec![r]),
+                    None => (MatchKind::None, vec![]),
+                },
+                (None, Input::Title(t)) => match searches[&t].clone() {
+                    found if found.is_empty() => (MatchKind::None, found),
+                    found => (MatchKind::Candidates, found),
+                },
+                (None, _) => (MatchKind::None, vec![]),
+            };
+            (input.clone(), kind, refs)
+        })
+        .collect();
 
     let ids = distinct(
         resolved
             .iter()
             .flat_map(|(_, _, refs)| refs.iter().map(|r| r.id.clone())),
     );
-    let (overview, steam) = if ids.is_empty() {
-        (HashMap::new(), HashMap::new())
-    } else {
-        let shops = STEAM_SHOP_ID.to_string();
-        (
-            parse_overview(&post_json(
-                api_key,
-                "/games/overview/v2",
-                &[("country", "US")],
-                &ids,
-            )?),
-            parse_steam_prices(&post_json(
-                api_key,
-                "/games/prices/v3",
-                &[("country", "US"), ("shops", &shops)],
-                &ids,
-            )?),
-        )
-    };
+    let shops = STEAM_SHOP_ID.to_string();
+    let us = [("country", "US")];
+    let overview = post_batch(api_key, "/games/overview/v2", &us, &ids, parse_overview)?;
+    let prices_query = [("country", "US"), ("shops", shops.as_str())];
+    let steam = post_batch(
+        api_key,
+        "/games/prices/v3",
+        &prices_query,
+        &ids,
+        parse_steam_prices,
+    )?;
     Ok(assemble(resolved, &overview, &steam))
 }

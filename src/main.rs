@@ -166,12 +166,12 @@ fn run_price(inputs: &[String], json: bool) {
         }
     }
 
-    let mut missing = false;
-    for g in groups.iter().filter(|g| g.kind == itad::MatchKind::None) {
-        eprintln!("not found: {}", g.input);
-        missing = true;
-    }
-    if missing {
+    let missing = groups.iter().filter(|g| g.kind == itad::MatchKind::None);
+    if missing
+        .inspect(|g| eprintln!("not found: {}", g.input))
+        .count()
+        > 0
+    {
         std::process::exit(1);
     }
 }
