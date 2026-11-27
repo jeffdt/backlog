@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -55,6 +55,9 @@ struct App {
     /// Queue load or write failure, shown in place of the hint until the next
     /// successful write.
     status_message: Option<String>,
+    /// The details popup's checkbox cursor: `None` when the popup is closed,
+    /// `0` on the queued row, `1` on the played row.
+    details_cursor: Option<usize>,
 }
 
 impl App {
@@ -89,6 +92,7 @@ impl App {
             pinned: None,
             pinned_unqueued: false,
             status_message,
+            details_cursor: None,
         }
     }
 
@@ -171,11 +175,57 @@ impl App {
             return;
         };
         let load_result = loader::load_all_games(&self.cache_dir);
+        self.reload_library(load_result);
+        self.sync_state = SyncState::Done(reports);
+        self.sync_rx = None;
+    }
+
+    /// Swaps in a freshly loaded library. An open details popup follows its
+    /// game to the game's new row, or closes when the game is gone.
+    fn reload_library(&mut self, load_result: LoadResult) {
+        let open_game = self.details_cursor.and(self.selected_game());
         self.games = load_result.games;
         self.sync_age = loader::format_sync_age(load_result.oldest_update);
         self.reset_rows();
-        self.sync_state = SyncState::Done(reports);
-        self.sync_rx = None;
+        let Some(name) = open_game else {
+            return;
+        };
+        let row = search::fuzzy_search(&self.input, &self.filtered())
+            .iter()
+            .position(|r| r.game.name == name);
+        match row {
+            Some(row) => self.selected = row,
+            None => self.details_cursor = None,
+        }
+    }
+
+    /// Opens the details popup on the selected game; does nothing with no rows.
+    fn open_details(&mut self) {
+        if self.selected_game().is_some() {
+            self.details_cursor = Some(0);
+        }
+    }
+
+    /// Handles a key while the details popup is open. The search box is not
+    /// listening, so unmapped keys are ignored rather than typed.
+    fn handle_details_key(&mut self, key: KeyEvent) {
+        let plain_or_ctrl = matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::CONTROL);
+        let cursor = self.details_cursor.unwrap_or(0);
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => self.details_cursor = None,
+            KeyCode::Down | KeyCode::Tab => self.details_cursor = Some(1),
+            KeyCode::Up | KeyCode::BackTab => self.details_cursor = Some(0),
+            KeyCode::Char(' ') if key.modifiers == KeyModifiers::NONE => {
+                if cursor == 0 {
+                    self.toggle_queued();
+                } else {
+                    self.toggle_played();
+                }
+            }
+            KeyCode::Char('q') if plain_or_ctrl => self.toggle_queued(),
+            KeyCode::Char('p') if plain_or_ctrl => self.toggle_played(),
+            _ => {}
+        }
     }
 
     /// The cursor position clamped to the currently visible rows, paired with
@@ -346,77 +396,91 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
         if event::poll(TICK_RATE)?
             && let Event::Key(key) = event::read()?
         {
-            match (key.code, key.modifiers) {
-                (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                    app.quit = true;
-                }
-                (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
-                    app.start_sync();
-                }
-                (KeyCode::BackTab, _) => {
-                    app.filter = app.filter.prev();
-                    app.reset_rows();
-                }
-                (KeyCode::Tab, _) => {
-                    app.filter = app.filter.next();
-                    app.reset_rows();
-                }
-                (KeyCode::Enter, _) => {
-                    app.toggle_queued();
-                }
-                (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
-                    app.toggle_played();
-                }
-                (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
-                    app.move_selected(true);
-                }
-                (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                    app.move_selected(false);
-                }
-                (KeyCode::Down, KeyModifiers::SHIFT) => {
-                    app.move_selected(true);
-                }
-                (KeyCode::Up, KeyModifiers::SHIFT) => {
-                    app.move_selected(false);
-                }
-                (KeyCode::Char(c), _) => {
-                    app.input.insert(app.cursor_pos, c);
-                    app.cursor_pos += c.len_utf8();
-                    app.reset_rows();
-                }
-                (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
-                    let prev = app.input[..app.cursor_pos]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    app.input.drain(prev..app.cursor_pos);
-                    app.cursor_pos = prev;
-                    app.reset_rows();
-                }
-                (KeyCode::Left, _) if app.cursor_pos > 0 => {
-                    app.cursor_pos = app.input[..app.cursor_pos]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                }
-                (KeyCode::Right, _) if app.cursor_pos < app.input.len() => {
-                    app.cursor_pos = app.input[app.cursor_pos..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| app.cursor_pos + i)
-                        .unwrap_or(app.input.len());
-                }
-                (KeyCode::Down, _) => {
-                    app.move_cursor(true);
-                }
-                (KeyCode::Up, _) => {
-                    app.move_cursor(false);
-                }
-                _ => {}
+            if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
+                app.quit = true;
+            } else if app.details_cursor.is_some() {
+                app.handle_details_key(key);
+            } else {
+                handle_list_key(app, key);
             }
         }
+    }
+}
+
+/// Handles a key while the result list and search box have focus.
+fn handle_list_key(app: &mut App, key: KeyEvent) {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            app.quit = true;
+        }
+        (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+            app.start_sync();
+        }
+        (KeyCode::BackTab, _) => {
+            app.filter = app.filter.prev();
+            app.reset_rows();
+        }
+        (KeyCode::Tab, _) => {
+            app.filter = app.filter.next();
+            app.reset_rows();
+        }
+        (KeyCode::Enter, _) => {
+            app.open_details();
+        }
+        (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+            app.toggle_queued();
+        }
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            app.toggle_played();
+        }
+        (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+            app.move_selected(true);
+        }
+        (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+            app.move_selected(false);
+        }
+        (KeyCode::Down, KeyModifiers::SHIFT) => {
+            app.move_selected(true);
+        }
+        (KeyCode::Up, KeyModifiers::SHIFT) => {
+            app.move_selected(false);
+        }
+        (KeyCode::Char(c), _) => {
+            app.input.insert(app.cursor_pos, c);
+            app.cursor_pos += c.len_utf8();
+            app.reset_rows();
+        }
+        (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
+            let prev = app.input[..app.cursor_pos]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            app.input.drain(prev..app.cursor_pos);
+            app.cursor_pos = prev;
+            app.reset_rows();
+        }
+        (KeyCode::Left, _) if app.cursor_pos > 0 => {
+            app.cursor_pos = app.input[..app.cursor_pos]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+        }
+        (KeyCode::Right, _) if app.cursor_pos < app.input.len() => {
+            app.cursor_pos = app.input[app.cursor_pos..]
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| app.cursor_pos + i)
+                .unwrap_or(app.input.len());
+        }
+        (KeyCode::Down, _) => {
+            app.move_cursor(true);
+        }
+        (KeyCode::Up, _) => {
+            app.move_cursor(false);
+        }
+        _ => {}
     }
 }
 
@@ -539,16 +603,14 @@ fn styled_hint(text: &str) -> Line<'static> {
 }
 
 /// The footer's key hint, naming only keys that do something right now:
-/// row keys only when rows exist, ranking only under the queued filter, and
-/// enter as "unqueue" when the selected game is already queued.
-fn hint_text(filter: Filter, has_rows: bool, selected_queued: bool) -> &'static str {
-    match (has_rows, filter == Filter::Queued, selected_queued) {
-        (false, _, _) => "type search · tab filter · ^r sync · esc quit",
-        (true, true, _) => {
-            "↑↓ move · enter unqueue · ^p played · ^j/^k rank · tab filter · esc quit"
+/// row keys only when rows exist, ranking only under the queued filter.
+fn hint_text(filter: Filter, has_rows: bool) -> &'static str {
+    match (has_rows, filter == Filter::Queued) {
+        (false, _) => "type search · tab filter · ^r sync · esc quit",
+        (true, true) => {
+            "↑↓ move · enter details · ^q queue · ^p played · ^j/^k rank · tab filter · esc quit"
         }
-        (true, false, true) => "↑↓ move · enter unqueue · ^p played · tab filter · esc quit",
-        (true, false, false) => "↑↓ move · enter queue · ^p played · tab filter · esc quit",
+        (true, false) => "↑↓ move · enter details · ^q queue · ^p played · tab filter · esc quit",
     }
 }
 
@@ -711,10 +773,11 @@ fn empty_state_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                 "type",
                 vec![text("fuzzy-search every game you own, across all stores")],
             ),
+            key("enter", vec![text("see what you can do with a game")]),
             key(
-                "enter",
+                "^q",
                 vec![
-                    text("add the selected game to your queue "),
+                    text("add it to your queue "),
                     Span::styled(QUEUED_GLYPH.to_string(), Style::default().fg(Color::Cyan)),
                 ],
             ),
@@ -856,9 +919,6 @@ fn draw(f: &mut Frame, app: &App) {
         search::fuzzy_search(&app.input, &filtered)
     };
     let selected = app.selected.min(results.len().saturating_sub(1));
-    let selected_queued = results
-        .get(selected)
-        .is_some_and(|r| app.queue.state(&r.game.name).queued);
 
     // A queue problem outranks the sync summary: it is the only state here the
     // user cannot regenerate by syncing again.
@@ -874,11 +934,7 @@ fn draw(f: &mut Frame, app: &App) {
         rule_area,
     );
     f.render_widget(
-        Paragraph::new(styled_hint(hint_text(
-            app.filter,
-            !results.is_empty(),
-            selected_queued,
-        ))),
+        Paragraph::new(styled_hint(hint_text(app.filter, !results.is_empty()))),
         hint_area,
     );
 
@@ -1433,13 +1489,14 @@ mod tests {
         let t = texts(&lines);
         let expected = [
             ("type", "fuzzy-search every game you own, across all stores"),
-            ("enter", "add the selected game to your queue \u{bb}"),
+            ("enter", "see what you can do with a game"),
+            ("^q", "add it to your queue \u{bb}"),
             ("^p", "mark it played \u{2713}"),
             ("tab", "switch between all / queued / played / unplayed"),
         ];
         assert!(t[0].starts_with("GETTING STARTED ─"), "{}", t[0]);
         assert_eq!(lines[0].spans[0].style.fg, Some(Color::Blue));
-        assert_eq!(t.len(), 5);
+        assert_eq!(t.len(), 6);
         for (i, (key, desc)) in expected.iter().enumerate() {
             assert!(t[i + 1].starts_with(&format!("│ {key:<6}")), "{}", t[i + 1]);
             assert!(t[i + 1].ends_with(desc), "{}", t[i + 1]);
@@ -1509,7 +1566,7 @@ mod tests {
             "{}",
             rows[6]
         );
-        assert!(rows[28].contains("enter queue"), "{}", rows[28]);
+        assert!(rows[28].contains("enter details"), "{}", rows[28]);
     }
 
     #[test]
@@ -1527,7 +1584,7 @@ mod tests {
         );
         assert!(rows[6].starts_with("│ │1  »  B"), "{}", rows[6]);
         assert!(rows[7].starts_with("│ │2  »  A"), "{}", rows[7]);
-        assert!(rows[28].contains("enter unqueue"), "{}", rows[28]);
+        assert!(rows[28].contains("enter details"), "{}", rows[28]);
         assert!(rows[28].contains("^j/^k rank"), "{}", rows[28]);
         let buf = render_buffer(&app, 100, 30);
         assert_eq!(buf[(2, 5)].fg, Color::Cyan);
@@ -1654,49 +1711,166 @@ mod tests {
 
     #[test]
     fn hint_text_only_names_keys_that_apply() {
-        const CASES: &[(Filter, bool, bool, &str)] = &[
-            (
-                Filter::All,
-                false,
-                false,
-                "type search · tab filter · ^r sync · esc quit",
-            ),
-            (
-                Filter::Queued,
-                false,
-                false,
-                "type search · tab filter · ^r sync · esc quit",
-            ),
-            (
-                Filter::All,
-                true,
-                false,
-                "↑↓ move · enter queue · ^p played · tab filter · esc quit",
-            ),
-            (
-                Filter::All,
-                true,
-                true,
-                "↑↓ move · enter unqueue · ^p played · tab filter · esc quit",
-            ),
+        const ROWS: &str = "↑↓ move · enter details · ^q queue · ^p played";
+        const NO_ROWS: &str = "type search · tab filter · ^r sync · esc quit";
+        let cases = [
+            (Filter::All, false, NO_ROWS.to_string()),
+            (Filter::Queued, false, NO_ROWS.to_string()),
+            (Filter::All, true, format!("{ROWS} · tab filter · esc quit")),
             (
                 Filter::Played,
                 true,
-                false,
-                "↑↓ move · enter queue · ^p played · tab filter · esc quit",
+                format!("{ROWS} · tab filter · esc quit"),
             ),
             (
                 Filter::Queued,
                 true,
-                true,
-                "↑↓ move · enter unqueue · ^p played · ^j/^k rank · tab filter · esc quit",
+                format!("{ROWS} · ^j/^k rank · tab filter · esc quit"),
             ),
         ];
-        let misses: Vec<_> = CASES
+        let misses: Vec<_> = cases
             .iter()
-            .filter(|(f, r, q, want)| hint_text(*f, *r, *q) != *want)
+            .filter(|(f, r, want)| hint_text(*f, *r) != *want)
             .collect();
         assert!(misses.is_empty(), "{misses:?}");
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn details_keys() {
+        use KeyCode::*;
+        // (keys, want_open, want_cursor, want_queued, want_played)
+        let cases: Vec<(Vec<KeyEvent>, bool, usize, bool, bool)> = vec![
+            (vec![key(Esc)], false, 0, false, false),
+            (vec![key(Enter)], false, 0, false, false),
+            (vec![key(Down)], true, 1, false, false),
+            (vec![key(Down), key(Down)], true, 1, false, false),
+            (vec![key(Down), key(Up)], true, 0, false, false),
+            (vec![key(Tab)], true, 1, false, false),
+            (vec![key(Tab), key(BackTab)], true, 0, false, false),
+            (vec![key(Char(' '))], true, 0, true, false),
+            (vec![key(Down), key(Char(' '))], true, 1, false, true),
+            (vec![key(Char('q'))], true, 0, true, false),
+            (vec![ctrl('q')], true, 0, true, false),
+            (vec![key(Char('p'))], true, 0, false, true),
+            (vec![ctrl('p')], true, 0, false, true),
+            (vec![key(Char('q')), key(Char('q'))], true, 0, false, false),
+            (vec![key(Char('x'))], true, 0, false, false),
+            (vec![ctrl('j'), ctrl('k')], true, 0, false, false),
+        ];
+        let mut misses = Vec::new();
+        for (i, (keys, open, cursor, queued, played)) in cases.iter().enumerate() {
+            let dir = TempDir::new().unwrap();
+            let mut app = test_app(&dir, &["A", "B"]);
+            app.filter = Filter::Unplayed;
+            app.open_details();
+            for k in keys {
+                app.handle_details_key(*k);
+            }
+            let state = app.queue.state("A");
+            let got = (
+                app.details_cursor.is_some(),
+                app.details_cursor.unwrap_or(0),
+                state.queued,
+                state.played,
+                app.input.is_empty(),
+            );
+            let want = (
+                *open,
+                if *open { *cursor } else { 0 },
+                *queued,
+                *played,
+                true,
+            );
+            if got != want {
+                misses.push(format!("row {i}: got {got:?}, want {want:?}"));
+            }
+        }
+        assert!(misses.is_empty(), "{misses:#?}");
+    }
+
+    #[test]
+    fn list_keys_toggle_and_open() {
+        use KeyCode::*;
+        // (input, keys, want_open, want_queued, want_played)
+        let cases: Vec<(&str, Vec<KeyEvent>, bool, bool, bool)> = vec![
+            ("a", vec![ctrl('q')], false, true, false),
+            ("a", vec![ctrl('p')], false, false, true),
+            ("a", vec![key(Enter)], true, false, false),
+            ("zzzz", vec![key(Enter)], false, false, false),
+        ];
+        let mut misses = Vec::new();
+        for (i, (input, keys, open, queued, played)) in cases.iter().enumerate() {
+            let dir = TempDir::new().unwrap();
+            let mut app = test_app(&dir, &["A", "B"]);
+            app.input = input.to_string();
+            for k in keys {
+                handle_list_key(&mut app, *k);
+            }
+            let state = app.queue.state("A");
+            let got = (app.details_cursor == Some(0), state.queued, state.played);
+            if got != (*open, *queued, *played) {
+                misses.push(format!("row {i}: got {got:?}"));
+            }
+        }
+        assert!(misses.is_empty(), "{misses:#?}");
+    }
+
+    fn library(names: &[&str]) -> LoadResult {
+        LoadResult {
+            games: names
+                .iter()
+                .map(|n| LibraryEntry {
+                    name: n.to_string(),
+                    platforms: vec!["steam".to_string()],
+                    ..Default::default()
+                })
+                .collect(),
+            warnings: Vec::new(),
+            oldest_update: None,
+        }
+    }
+
+    #[test]
+    fn details_closes_when_game_leaves_library() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.filter = Filter::Unplayed;
+        app.open_details();
+        app.reload_library(library(&["B"]));
+        assert_eq!(app.details_cursor, None);
+    }
+
+    #[test]
+    fn details_follows_its_game_across_a_reload() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.filter = Filter::Unplayed;
+        app.selected = 1;
+        app.open_details();
+        app.reload_library(library(&["A", "B", "C"]));
+        assert_eq!(app.details_cursor, Some(0));
+        assert_eq!(app.selected_game(), Some("B".to_string()));
+    }
+
+    #[test]
+    fn details_played_toggle_keeps_row_under_unplayed() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.filter = Filter::Unplayed;
+        app.open_details();
+        app.handle_details_key(key(KeyCode::Char('p')));
+        app.handle_details_key(key(KeyCode::Esc));
+        assert_eq!(visible(&app), ["A", "B"]);
+        handle_list_key(&mut app, key(KeyCode::Down));
+        assert_eq!(visible(&app), ["B"]);
     }
 
     #[test]
