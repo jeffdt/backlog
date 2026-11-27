@@ -103,9 +103,13 @@ diacritics stripped via `unicode-normalization`) so `okami` finds
 "Ōkami HD"; the fold keeps a byte-to-original-char map because frizbee
 reports match positions as byte offsets, while `match_indices` (used for
 TUI highlighting) are char positions in the original name. Multi-word
-queries split into words that must all match. Matching is tiered: if any
-folded title contains every word as a literal substring, only those titles
-are returned; otherwise it falls back to fuzzy matching with one typo
+queries split into words that must all match. Matching is tiered: strong
+hits are titles whose folded name contains every word as a literal
+substring, plus, for a single-word query of 2+ chars, titles whose word
+initials contain it (`gta` for "Grand Theft Auto V"). If there are any,
+only strong hits are returned, with titles whose initials start with the
+query ranked first (scores are lifted to keep the list descending);
+otherwise it falls back to fuzzy matching with one typo
 allowed per four letters of each word, where a relative threshold
 (`best * 4/5`) prunes weak matches. That keeps typos and abbreviations
 working without letting scattered subsequence matches crowd out real hits.
