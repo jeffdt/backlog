@@ -711,63 +711,91 @@ fn empty_state_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
+/// A `‹ text ›` corner title in the accent color, with the one-dash gap
+/// from the corner that rolomux and boomerang use.
+fn corner_title(text: &str, bold: bool, dash_first: bool) -> Line<'static> {
+    let border = Style::default().fg(ACCENT);
+    let mut emphasis = border.add_modifier(Modifier::ITALIC);
+    if bold {
+        emphasis = emphasis.add_modifier(Modifier::BOLD);
+    }
+    let label = Span::styled(format!("‹ {text} ›"), emphasis);
+    let dash = Span::styled("─", border);
+    if dash_first {
+        Line::from(vec![dash, label])
+    } else {
+        Line::from(vec![label, dash]).right_aligned()
+    }
+}
+
+/// The section header title for a filter browsed with an empty search.
+fn browse_title(filter: Filter) -> &'static str {
+    match filter {
+        Filter::All => "LIBRARY",
+        Filter::Queued => "QUEUE",
+        Filter::Played => "PLAYED",
+        Filter::Unplayed => "UNPLAYED",
+    }
+}
+
 fn draw(f: &mut Frame, app: &App) {
-    let area = f.area();
-
-    let title = format!(" bouncer \u{2500}\u{2500} {} ", app.sync_age);
-
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT))
-        .title(title)
-        .title_bottom(Line::from(" Esc to quit ").right_aligned())
+        .title(corner_title("bouncer", true, true))
+        .title(corner_title(&app.sync_age, false, false))
+        .title_bottom(corner_title(
+            &format!("v{}", env!("CARGO_PKG_VERSION")),
+            false,
+            false,
+        ))
         .padding(Padding::new(1, 1, 0, 0));
 
-    let inner = outer_block.inner(area);
-    f.render_widget(outer_block, area);
+    let inner = outer_block.inner(f.area());
+    f.render_widget(outer_block, f.area());
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // blank
-            Constraint::Length(3), // filter row
-            Constraint::Length(1), // blank
-            Constraint::Length(3), // input box
-            Constraint::Length(1), // blank
-            Constraint::Min(1),    // body
-            Constraint::Length(1), // hint / sync status
-        ])
-        .split(inner);
+    let [
+        filter_area,
+        _,
+        search_area,
+        _,
+        header_area,
+        body_area,
+        status_area,
+        rule_area,
+        hint_area,
+    ] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let dim = Style::default().fg(Color::DarkGray);
 
-    let counts = view_counts(app);
-    let active_count = counts[FILTERS.iter().position(|&x| x == app.filter).unwrap_or(0)];
-    f.render_widget(Paragraph::new(filter_row(app.filter, counts)), chunks[1]);
+    f.render_widget(
+        Paragraph::new(filter_row(app.filter, view_counts(app))),
+        filter_area,
+    );
 
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
-    let input_inner = input_block.inner(chunks[3]);
-    f.render_widget(input_block, chunks[3]);
-    let query_span = if app.input.is_empty() {
-        Span::styled(
-            format!("type to search {active_count} games"),
-            Style::default().fg(Color::DarkGray),
-        )
-    } else {
-        Span::styled(app.input.clone(), Style::default().fg(Color::White))
-    };
+    const SEARCH_PROMPT: &str = "search: ";
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(">", Style::default().fg(Color::Cyan)),
-            Span::raw(" "),
-            query_span,
+            Span::styled(SEARCH_PROMPT, dim),
+            Span::raw(app.input.clone()),
         ])),
-        input_inner,
+        search_area,
     );
-    let cursor_x = input_inner.x + 2 + app.input[..app.cursor_pos].chars().count() as u16;
-    f.set_cursor_position((cursor_x, input_inner.y));
+    let cursor_x = search_area.x
+        + SEARCH_PROMPT.len() as u16
+        + app.input[..app.cursor_pos].chars().count() as u16;
+    f.set_cursor_position((cursor_x, search_area.y));
 
     let show_empty_state = app.input.is_empty() && app.filter == Filter::All;
     let filtered = app.filtered();
@@ -776,86 +804,89 @@ fn draw(f: &mut Frame, app: &App) {
     } else {
         search::fuzzy_search(&app.input, &filtered)
     };
+    let selected = app.selected.min(results.len().saturating_sub(1));
+    let selected_queued = results
+        .get(selected)
+        .is_some_and(|r| app.queue.state(&r.game.name).queued);
 
     // A queue problem outranks the sync summary: it is the only state here the
     // user cannot regenerate by syncing again.
-    let (hint, hint_color) = match &app.status_message {
-        Some(message) => (message.clone(), Color::Red),
-        None => {
-            let hint = match &app.sync_state {
-                SyncState::Idle => hint_text(app.filter, !results.is_empty(), false).to_string(),
-                SyncState::Syncing => "syncing...".to_string(),
-                SyncState::Done(reports) => format_sync_summary(reports, &app.sync_before_counts),
-            };
-            (hint, Color::DarkGray)
+    let status = match (&app.status_message, &app.sync_state) {
+        (Some(message), _) => Span::styled(message.clone(), Style::default().fg(Color::Red)),
+        (None, SyncState::Syncing) => Span::styled("syncing...", dim),
+        (None, SyncState::Done(reports)) => {
+            Span::styled(format_sync_summary(reports, &app.sync_before_counts), dim)
         }
+        (None, SyncState::Idle) => Span::raw(""),
     };
-    let status_line = if app.status_message.is_none() && matches!(app.sync_state, SyncState::Idle) {
-        styled_hint(&hint)
-    } else {
-        Line::from(vec![Span::styled(hint, Style::default().fg(hint_color))])
-    };
-    f.render_widget(Paragraph::new(status_line), chunks[6]);
+    f.render_widget(Paragraph::new(Line::from(status)), status_area);
+    f.render_widget(
+        Paragraph::new(Span::styled("─".repeat(rule_area.width as usize), dim)),
+        rule_area,
+    );
+    f.render_widget(
+        Paragraph::new(styled_hint(hint_text(
+            app.filter,
+            !results.is_empty(),
+            selected_queued,
+        ))),
+        hint_area,
+    );
 
-    let results_area = chunks[5];
     if show_empty_state {
-        f.render_widget(
-            Paragraph::new(empty_state_lines(app, results_area.width)),
-            results_area,
-        );
-        return;
-    }
-    if results.is_empty() {
+        let mut lines = empty_state_lines(app, body_area.width);
+        let header = lines.remove(0);
+        f.render_widget(Paragraph::new(header), header_area);
+        f.render_widget(Paragraph::new(lines), body_area);
         return;
     }
 
-    let max_selected = results.len() - 1;
-    let selected = app.selected.min(max_selected);
-    let visible_rows = results_area.height as usize;
-
-    let scroll_offset = if selected >= visible_rows {
-        selected - visible_rows + 1
+    let color = filter_color(app.filter);
+    let (title, tail) = if app.input.is_empty() {
+        (
+            browse_title(app.filter),
+            format!("{} games", filtered.len()),
+        )
     } else {
-        0
+        (
+            "RESULTS",
+            format!("{} of {}", results.len(), filtered.len()),
+        )
     };
+    f.render_widget(
+        Paragraph::new(section_header(title, color, Some(&tail), header_area.width)),
+        header_area,
+    );
 
+    let visible_rows = body_area.height as usize;
+    let scroll_offset = (selected + 1).saturating_sub(visible_rows);
     for (i, result) in results
         .iter()
         .skip(scroll_offset)
         .take(visible_rows)
         .enumerate()
     {
-        let row_y = results_area.y + i as u16;
-        if row_y >= results_area.y + results_area.height {
-            break;
-        }
-
-        let abs_idx = i + scroll_offset;
-        let row_area = Rect::new(results_area.x, row_y, results_area.width, 1);
-
         let rank = if app.filter == Filter::Queued {
             app.queue.rank(&result.game.name)
         } else {
             None
         };
-        let spans = result_row_spans(
+        let mut spans = result_row_spans(
             app,
             &result.game.name,
             &result.game.platforms,
             &result.match_indices,
-            results_area.width as usize,
+            body_area.width as usize,
             rank,
-            filter_color(app.filter),
+            color,
         );
-
-        let mut row_style = Style::default();
-        if abs_idx == selected {
-            row_style = row_style.bg(Color::DarkGray);
-        } else if abs_idx % 2 == 0 {
-            row_style = row_style.bg(Color::Black);
+        if i + scroll_offset == selected {
+            for span in spans.iter_mut().skip(1) {
+                span.style = span.style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+            }
         }
-
-        f.render_widget(Paragraph::new(Line::from(spans)).style(row_style), row_area);
+        let row_area = Rect::new(body_area.x, body_area.y + i as u16, body_area.width, 1);
+        f.render_widget(Paragraph::new(Line::from(spans)), row_area);
     }
 }
 
@@ -1227,21 +1258,122 @@ mod tests {
             .collect()
     }
 
+    fn render_buffer(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
     #[test]
-    fn draw_renders_tabs_placeholder_and_title_without_game_count() {
+    fn draw_renders_family_chrome() {
         let dir = TempDir::new().unwrap();
         let app = test_app(&dir, &["A", "B", "C"]);
         let rows = render(&app, 100, 30);
+        assert!(rows[0].starts_with("╭─‹ bouncer ›─"), "{}", rows[0]);
+        assert!(rows[0].ends_with("‹ never synced ›─╮"), "{}", rows[0]);
+        let version = format!("‹ v{} ›─╯", env!("CARGO_PKG_VERSION"));
+        assert!(rows[29].ends_with(&version), "{}", rows[29]);
+        assert!(rows[1].contains("all 3   ·   » queued 0"), "{}", rows[1]);
+        assert!(rows[3].starts_with("│ search: "), "{}", rows[3]);
+        assert!(rows[5].contains("GETTING STARTED ─"), "{}", rows[5]);
+        let rule = rows[27].trim_matches(|c| c == '│' || c == ' ');
         assert!(
-            rows[0].contains("bouncer \u{2500}\u{2500} never synced"),
+            !rule.is_empty() && rule.chars().all(|c| c == '─'),
             "{}",
-            rows[0]
+            rows[27]
         );
-        assert!(!rows[0].contains("games ("));
-        assert!(rows[2].contains("all 3   ·   » queued 0"), "{}", rows[2]);
-        assert!(rows.iter().any(|r| r.contains("> type to search 3 games")));
-        assert!(rows[28].contains("type search"), "{}", rows[28]);
-        assert!(!rows[28].contains(" all "));
+        assert!(
+            rows[28].contains("type search · tab filter · ^r sync · esc quit"),
+            "{}",
+            rows[28]
+        );
+        let buf = render_buffer(&app, 100, 30);
+        assert_eq!(buf[(0, 0)].fg, Color::Magenta);
+    }
+
+    #[test]
+    fn draw_shows_results_header_with_count_while_searching() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["Hollow Knight", "Hades", "Celeste"]);
+        app.input = "hol".into();
+        app.cursor_pos = 3;
+        let rows = render(&app, 100, 30);
+        assert!(rows[5].contains("RESULTS ─"), "{}", rows[5]);
+        assert!(
+            rows[5].trim_end_matches(['│', ' ']).ends_with(" of 3"),
+            "{}",
+            rows[5]
+        );
+        assert!(rows[6].starts_with("│ │"), "{}", rows[6]);
+        assert!(rows[6].contains("Hollow Knight"), "{}", rows[6]);
+        assert!(
+            rows[6].trim_end_matches(['│', ' ']).ends_with("steam"),
+            "{}",
+            rows[6]
+        );
+        assert!(rows[28].contains("enter queue"), "{}", rows[28]);
+    }
+
+    #[test]
+    fn draw_colors_the_queued_view_cyan_and_ranks_its_rows() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        queue_all(&mut app, &["B", "A"]);
+        app.filter = Filter::Queued;
+        let rows = render(&app, 100, 30);
+        assert!(rows[5].contains("QUEUE ─"), "{}", rows[5]);
+        assert!(
+            rows[5].trim_end_matches(['│', ' ']).ends_with("2 games"),
+            "{}",
+            rows[5]
+        );
+        assert!(rows[6].starts_with("│ │1  »  B"), "{}", rows[6]);
+        assert!(rows[7].starts_with("│ │2  »  A"), "{}", rows[7]);
+        assert!(rows[28].contains("enter unqueue"), "{}", rows[28]);
+        assert!(rows[28].contains("^j/^k rank"), "{}", rows[28]);
+        let buf = render_buffer(&app, 100, 30);
+        assert_eq!(buf[(2, 5)].fg, Color::Cyan);
+        assert_eq!(buf[(2, 6)].fg, Color::Cyan);
+    }
+
+    #[test]
+    fn draw_puts_queue_errors_in_the_status_line() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("queue.json"), "{ not json").unwrap();
+        let app = test_app(&dir, &["A"]);
+        let buf = render_buffer(&app, 100, 30);
+        let row: String = (0..100)
+            .map(|x| buf[(x, 26)].symbol().to_string())
+            .collect();
+        assert!(!row.trim_matches(['│', ' ']).is_empty(), "status row empty");
+        assert_eq!(buf[(2, 26)].fg, Color::Red);
+    }
+
+    #[test]
+    fn draw_keeps_the_highlight_on_a_selection_below_the_fold() {
+        let dir = TempDir::new().unwrap();
+        let names: Vec<String> = (0..40).map(|i| format!("Game {i:02}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut app = test_app(&dir, &refs);
+        app.input = "game".into();
+        app.cursor_pos = 4;
+        app.selected = 35;
+        let expected = search::fuzzy_search(&app.input, &app.filtered())[35]
+            .game
+            .name
+            .clone();
+        let buf = render_buffer(&app, 100, 30);
+        let highlighted: Vec<String> = (0..30)
+            .filter(|&y| buf[(3, y)].bg == Color::DarkGray)
+            .map(|y| (0..100).map(|x| buf[(x, y)].symbol().to_string()).collect())
+            .collect();
+        assert_eq!(highlighted.len(), 1, "{highlighted:#?}");
+        assert!(highlighted[0].contains(&expected), "{}", highlighted[0]);
+        assert_ne!(
+            buf[(2, 6)].bg,
+            Color::DarkGray,
+            "gutter stays out of the bar"
+        );
     }
 
     #[test]
