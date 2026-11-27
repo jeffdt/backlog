@@ -1137,15 +1137,17 @@ fn draw_details(f: &mut Frame, app: &App, area: Rect) {
         }
         lines.push(Line::from(spans));
     }
-    if let Some(rank) = rank {
-        lines.push(Line::from(vec![
+    // The row is reserved even when unqueued so toggling never resizes the popup.
+    lines.push(match rank {
+        Some(rank) => Line::from(vec![
             Span::styled("  rank      ", dim),
             Span::raw(format!(
                 "#{rank} of {}",
                 app.queue.entries.iter().filter(|e| e.queued).count()
             )),
-        ]));
-    }
+        ]),
+        None => Line::default(),
+    });
     lines.push(Line::styled(
         format!(" {}", "─".repeat(inner_width.saturating_sub(2))),
         dim,
@@ -2191,6 +2193,14 @@ mod tests {
                     misses.push(format!("{label}: unexpected {a:?}"));
                 }
             }
+        }
+        let title_row = |app: &App| {
+            popup_text(app, 100, 30)
+                .lines()
+                .position(|l| l.contains("‹ Hollow Knight ›"))
+        };
+        if title_row(&plain) != title_row(&on) {
+            misses.push("queueing moved the popup".to_string());
         }
         let buf = render_buffer(&both, 100, 30);
         let text = popup_text(&both, 100, 30);
