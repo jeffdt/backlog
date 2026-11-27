@@ -10,7 +10,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
 use crate::LibraryEntry;
 use crate::loader::{self, LoadResult};
@@ -1010,6 +1010,159 @@ fn draw(f: &mut Frame, app: &App) {
         let row_area = Rect::new(body_area.x, body_area.y + i as u16, body_area.width, 1);
         f.render_widget(Paragraph::new(Line::from(spans)), row_area);
     }
+
+    if app.details_cursor.is_some() {
+        draw_details(f, app, body_area);
+    }
+}
+
+/// Formats an RFC3339 timestamp as `Nov 27, 2026` in local time, or `None`
+/// when it does not parse.
+fn format_date(rfc3339: &str) -> Option<String> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(rfc3339).ok()?;
+    Some(
+        parsed
+            .with_timezone(&chrono::Local)
+            .format("%b %-d, %Y")
+            .to_string(),
+    )
+}
+
+/// Draws the game details popup centered over `area`, clamped to fit it.
+fn draw_details(f: &mut Frame, app: &App, area: Rect) {
+    let Some(name) = app.selected_game() else {
+        return;
+    };
+    let entry = app.games.iter().find(|g| g.name == name);
+    let state = app.queue.entry(&name);
+    let queued = state.is_some_and(|e| e.queued);
+    let played = state.is_some_and(|e| e.played);
+    let dim = Style::default().fg(Color::DarkGray);
+    let chord = Style::default().fg(Color::Gray);
+
+    let width = area.width.min(46);
+    let inner_width = width.saturating_sub(2) as usize;
+    let platforms: &[String] = entry.map_or(&[], |g| g.platforms.as_slice());
+    let rank = if queued { app.queue.rank(&name) } else { None };
+
+    let flag_row = |index: usize,
+                    on: bool,
+                    glyph: char,
+                    color: Color,
+                    label: &str,
+                    at: Option<&String>,
+                    keys: &str| {
+        let date = if on {
+            at.and_then(|d| format_date(d))
+        } else {
+            None
+        };
+        let mut text_len = 2 + 3 + 1 + 1 + label.chars().count() + 1;
+        let mut spans = vec![
+            Span::raw("  "),
+            Span::raw(if on { "[x] " } else { "[ ] " }),
+            Span::styled(glyph.to_string(), Style::default().fg(color)),
+            Span::raw(format!(" {label}")),
+        ];
+        if let Some(date) = date {
+            text_len += 2 + date.chars().count();
+            spans.push(Span::styled(format!("  {date}"), dim));
+        }
+        spans.push(Span::raw(
+            " ".repeat(inner_width.saturating_sub(text_len + 4)),
+        ));
+        spans.push(Span::styled(keys.to_string(), chord));
+        let mut line = Line::from(spans);
+        if app.details_cursor == Some(index) {
+            line = line.patch_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+        line
+    };
+
+    let mut lines = vec![
+        Line::raw(""),
+        flag_row(
+            0,
+            queued,
+            QUEUED_GLYPH,
+            Color::Cyan,
+            "queued",
+            state.and_then(|e| e.queued_at.as_ref()),
+            "^q",
+        ),
+        flag_row(
+            1,
+            played,
+            PLAYED_GLYPH,
+            Color::Green,
+            "played",
+            state.and_then(|e| e.played_at.as_ref()),
+            "^p",
+        ),
+        Line::raw(""),
+    ];
+    for (i, platform) in platforms.iter().enumerate() {
+        let label = if i == 0 { "owned on  " } else { "          " };
+        let mut spans = vec![
+            Span::styled(format!("  {label}"), dim),
+            Span::styled(
+                platform.clone(),
+                Style::default()
+                    .fg(platform_color(platform))
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ];
+        if let Some(date) = entry
+            .and_then(|g| g.first_seen.get(platform))
+            .and_then(|d| format_date(d))
+        {
+            spans.push(Span::styled(format!("   {date}"), dim));
+        }
+        lines.push(Line::from(spans));
+    }
+    if let Some(rank) = rank {
+        lines.push(Line::from(vec![
+            Span::styled("  rank      ", dim),
+            Span::raw(format!(
+                "#{rank} of {}",
+                app.queue.entries.iter().filter(|e| e.queued).count()
+            )),
+        ]));
+    }
+    lines.push(Line::styled(
+        format!(" {}", "─".repeat(inner_width.saturating_sub(2))),
+        dim,
+    ));
+    let mut hint = styled_hint("↑↓ move · space toggle · esc close");
+    hint.spans.insert(0, Span::raw("  "));
+    lines.push(hint);
+
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+
+    let max_title = inner_width.saturating_sub(6);
+    let title = if name.chars().count() > max_title {
+        let kept: String = name.chars().take(max_title.saturating_sub(1)).collect();
+        format!("{kept}…")
+    } else {
+        name
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(corner_title(&title, true, true));
+    f.render_widget(Clear, popup);
+    f.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 #[cfg(test)]
@@ -1908,5 +2061,109 @@ mod tests {
             "{ not json at all",
             "a queue file we could not read must survive a toggle"
         );
+    }
+
+    #[test]
+    fn format_date_rows() {
+        let ok = format_date("2026-11-27T15:00:00+00:00").unwrap();
+        assert!(ok.contains("2026") && ok.starts_with("Nov 2"), "{ok}");
+        assert_eq!(format_date("garbage"), None);
+    }
+
+    fn popup_app(dir: &TempDir, name: &str) -> App {
+        let mut app = test_app(dir, &[name]);
+        app.games[0].platforms = vec!["steam".to_string(), "gog".to_string()];
+        app.games[0]
+            .first_seen
+            .insert("steam".to_string(), "2026-03-04T12:00:00+00:00".to_string());
+        app.filter = Filter::Unplayed;
+        app.open_details();
+        app
+    }
+
+    fn popup_text(app: &App, w: u16, h: u16) -> String {
+        render(app, w, h).join("\n")
+    }
+
+    #[test]
+    fn details_popup_render_rows() {
+        let dir = TempDir::new().unwrap();
+        let mut closed = popup_app(&dir, "Hollow Knight");
+        closed.details_cursor = None;
+        let mut off = popup_app(&dir, "Hollow Knight");
+        off.queue.toggle_queued("Hollow Knight");
+        off.queue.toggle_queued("Hollow Knight");
+        off.queue.entries[0].queued_at = Some("2026-11-27T15:00:00+00:00".to_string());
+        let mut on = popup_app(&dir, "Hollow Knight");
+        on.queue.toggle_queued("Hollow Knight");
+        let plain = popup_app(&dir, "Hollow Knight");
+
+        let always = [
+            "‹ Hollow Knight ›",
+            "[ ] ✓ played",
+            "^q",
+            "^p",
+            "↑↓ move · space toggle · esc close",
+            "owned on  steam   Mar 4, 2026",
+        ];
+        let cases: Vec<(&str, &App, Vec<&str>, Vec<&str>)> = vec![
+            (
+                "closed",
+                &closed,
+                vec![],
+                vec!["↑↓ move · space", "owned on"],
+            ),
+            ("plain", &plain, always.to_vec(), vec!["rank", "[x]"]),
+            (
+                "queued",
+                &on,
+                vec!["[x] » queued", "2026", "#1 of 1", "rank"],
+                vec![],
+            ),
+            (
+                "flag off, stale date",
+                &off,
+                vec!["[ ] » queued"],
+                vec!["rank", "Nov"],
+            ),
+        ];
+        let mut misses = Vec::new();
+        for (label, app, present, absent) in cases {
+            let text = popup_text(app, 100, 30);
+            for p in present {
+                if !text.contains(p) {
+                    misses.push(format!("{label}: missing {p:?}"));
+                }
+            }
+            for a in absent {
+                if text.contains(a) {
+                    misses.push(format!("{label}: unexpected {a:?}"));
+                }
+            }
+        }
+        let text = popup_text(&plain, 100, 30);
+        let gog = text.lines().find(|l| l.contains("gog")).unwrap();
+        if gog.contains("202") {
+            misses.push(format!("gog line has a date: {gog}"));
+        }
+        assert!(misses.is_empty(), "{misses:#?}\n{text}");
+    }
+
+    #[test]
+    fn details_popup_survives_small_terminals_and_long_names() {
+        let dir = TempDir::new().unwrap();
+        let long = format!("{}™", "x".repeat(120));
+        for (name, w, h) in [
+            ("Hollow Knight", 50, 16),
+            (long.as_str(), 100, 30),
+            (long.as_str(), 50, 16),
+        ] {
+            let app = popup_app(&dir, name);
+            let text = popup_text(&app, w, h);
+            if name == long {
+                assert!(text.contains("…"), "{text}");
+            }
+            assert!(text.lines().all(|l| l.chars().count() == w as usize));
+        }
     }
 }
