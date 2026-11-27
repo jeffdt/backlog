@@ -11,6 +11,8 @@ no matter which launcher owns it, then queue up what you mean to play next.
 ![Platform](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey)
 ![Vibe coded](https://img.shields.io/badge/vibe%20coded-100%25-ff69b4)
 
+![Searching one library across four launchers: "hollow" finds both Hollow Knights and an Epic-only title, "gta" matches Grand Theft Auto by its initials, and the typo "elysum" still finds Disco Elysium on GOG and Steam](docs/images/search.gif)
+
 ## Setup
 
 ```sh
@@ -30,27 +32,71 @@ needs. Press Enter to skip it and rerun `setup` later to add it.
 
 ## Usage
 
-```sh
-# One-shot search (`bouncer search "..."` is the explicit form, for titles
-# that collide with a command name like "queue")
-bouncer "hollow knight"
+Run `bouncer` with no arguments for the interactive TUI. Everything else is a
+plain command whose output pipes cleanly (no color).
 
-# Sync library caches from all sources (-v lists the titles added and removed)
-bouncer sync
-bouncer sync -v
+### Search
 
-# Print your ranked queue
-bouncer queue
+Fuzzy, typo-tolerant, and indifferent to `™` and `®`. `»` marks a queued game
+and `✓` a played one.
 
-# Current and all-time-low prices (titles, Steam store URLs, Steam app IDs, or IsThereAnyDeal game IDs)
-bouncer price "hollow knight" "https://store.steampowered.com/app/367520"
+```console
+$ bouncer hollow
+   Hollow Knight            steam
+»  Hollow Knight: Silksong  steam
+   Mina the Hollower        epic
 
-# Interactive TUI
-bouncer
-
-# Print the installed version
-bouncer --version
+$ bouncer spirtfarer
+   Spiritfarer®: Farewell Edition  steam
 ```
+
+`bouncer search "..."` is the explicit form, for titles that collide with a
+command name like "queue".
+
+### Queue
+
+Print your ranked queue:
+
+```console
+$ bouncer queue
+ 1   Hollow Knight: Silksong        steam
+ 2   Disco Elysium - The Final Cut  steam
+ 3 ✓ Outer Wilds                    epic / steam
+ 4   Pentiment                      gog
+```
+
+### Prices
+
+Current and all-time-low prices from IsThereAnyDeal. Pass titles, Steam store
+URLs, Steam app IDs, or IsThereAnyDeal game IDs. Prices are fetched fresh on
+every run, so yours will differ from this example:
+
+```console
+$ bouncer price "hades ii" "outer wilds" https://store.steampowered.com/app/1145360
+Title        Steam        Best now               All-time low
+Hades II     $20.99 -30%  $20.99 -30% Steam      $20.99 Steam 2026-06-25
+Outer Wilds  $12.49 -50%  $9.75 -61% GameBillet  $9.75 GameBillet 2026-10-31
+Hades        $6.24 -75%   $6.24 -75% Steam       $6.24 Steam 2025-09-17
+```
+
+### Sync
+
+Refresh library caches from all sources. `-v` lists the titles added and
+removed:
+
+```console
+$ bouncer sync -v
+Syncing libraries...
+  epic: 697 games (+2 -0)
+    + Control
+    + Tacoma
+  gog: 194 games (+0 -0)
+  amazon: 184 games (+0 -0)
+  steam: 559 games (+0 -0)
+Done.
+```
+
+`bouncer --version` prints the installed version.
 
 ## Sources
 
@@ -60,7 +106,11 @@ bouncer --version
 ## Queue
 
 Mark games as queued (want to play soon) or played from the TUI, then
-filter and reorder the list. Queue state lives in
+filter and reorder the list.
+
+![Queueing Into the Breach from a search, switching to the queued filter to move it up two ranks, then the played filter, where Outer Wilds appears as both queued and played](docs/images/queue.gif)
+
+ Queue state lives in
 `~/.local/share/bouncer/queue.json`. If that file can't be read or parsed,
 bouncer says so and stops saving rather than overwriting it, so a bad
 hand-edit never costs you the queue.
