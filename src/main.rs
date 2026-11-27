@@ -31,7 +31,11 @@ enum Commands {
         query: String,
     },
     /// Refresh caches from sources
-    Sync,
+    Sync {
+        /// List the titles added and removed on each platform
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Configure Steam and IsThereAnyDeal API credentials
     Setup,
     /// Print the ranked queue
@@ -79,7 +83,7 @@ fn main() {
     match cli.command {
         Some(Commands::Search { query }) => run_search(&query),
         Some(Commands::Setup) => run_setup(),
-        Some(Commands::Sync) => run_sync(),
+        Some(Commands::Sync { verbose }) => run_sync(verbose),
         Some(Commands::Queue) => run_queue(),
         Some(Commands::Price { json, inputs }) => run_price(&inputs, json),
         None => {
@@ -185,7 +189,7 @@ fn load_queue_or_warn() -> queue::Queue {
     })
 }
 
-fn run_sync() {
+fn run_sync(verbose: bool) {
     let heroic_dir = sources::heroic::heroic_store_cache_dir();
     let config_path = config::default_config_path();
     let cache_dir = cache::default_cache_dir();
@@ -196,7 +200,21 @@ fn run_sync() {
     for report in &reports {
         match &report.status {
             sync::SyncStatus::Ok => {
-                eprintln!("  {}: {} games", report.platform, report.game_count);
+                eprintln!(
+                    "  {}: {} games (+{} -{})",
+                    report.platform,
+                    report.game_count,
+                    report.added.len(),
+                    report.removed.len()
+                );
+                if verbose {
+                    for name in &report.added {
+                        eprintln!("    + {name}");
+                    }
+                    for name in &report.removed {
+                        eprintln!("    - {name}");
+                    }
+                }
             }
             sync::SyncStatus::Skipped(reason) => {
                 eprintln!("  {}: skipped ({reason})", report.platform);
@@ -272,7 +290,7 @@ fn run_tui() {
 
     let load_result = if load_result.games.is_empty() {
         eprintln!("No cached games found, syncing...");
-        run_sync();
+        run_sync(false);
         loader::load_all_games(&cache_dir)
     } else {
         load_result

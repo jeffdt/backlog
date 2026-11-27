@@ -924,6 +924,8 @@ mod tests {
             platform: platform.to_string(),
             game_count: count,
             status: SyncStatus::Ok,
+            added: Vec::new(),
+            removed: Vec::new(),
         }
     }
 
@@ -959,11 +961,15 @@ mod tests {
                 platform: "gog".to_string(),
                 game_count: 0,
                 status: SyncStatus::Skipped("gog_library.json not found".to_string()),
+                added: Vec::new(),
+                removed: Vec::new(),
             },
             SyncReport {
                 platform: "amazon".to_string(),
                 game_count: 0,
                 status: SyncStatus::Error("network error".to_string()),
+                added: Vec::new(),
+                removed: Vec::new(),
             },
         ];
         let before = HashMap::new();

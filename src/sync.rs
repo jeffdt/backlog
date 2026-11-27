@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::Game;
@@ -20,6 +21,42 @@ pub struct SyncReport {
     pub platform: String,
     pub game_count: usize,
     pub status: SyncStatus,
+    /// Titles in the new library that were not in the previous cache, sorted.
+    pub added: Vec<String>,
+    /// Titles in the previous cache that are no longer in the library, sorted.
+    pub removed: Vec<String>,
+}
+
+impl SyncReport {
+    fn without_games(platform: &str, status: SyncStatus) -> Self {
+        SyncReport {
+            platform: platform.to_string(),
+            game_count: 0,
+            status,
+            added: Vec::new(),
+            removed: Vec::new(),
+        }
+    }
+}
+
+/// Writes `games` to `cache_path`, reporting which titles were added or
+/// removed relative to the cache it replaces. A failed write keeps the old
+/// cache and reports no changes.
+fn write_and_report(platform: &str, cache_path: &Path, games: &[Game], source: &str) -> SyncReport {
+    let old_names: BTreeSet<String> = cache::read_cache(cache_path)
+        .map(|c| c.games.into_iter().map(|g| g.name).collect())
+        .unwrap_or_default();
+    if let Err(e) = cache::write_cache(cache_path, games, source) {
+        return SyncReport::without_games(platform, SyncStatus::Error(e.to_string()));
+    }
+    let new_names: BTreeSet<String> = games.iter().map(|g| g.name.clone()).collect();
+    SyncReport {
+        platform: platform.to_string(),
+        game_count: games.len(),
+        status: SyncStatus::Ok,
+        added: new_names.difference(&old_names).cloned().collect(),
+        removed: old_names.difference(&new_names).cloned().collect(),
+    }
 }
 
 /// Removes the cache at `cache_path` for a source that no longer exists, so its
@@ -55,24 +92,12 @@ pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
             let games = loader(&source_path);
             let cache_path = cache_dir.join(format!("{platform}.json"));
             if games.is_empty() && !source_path.exists() {
-                return SyncReport {
-                    platform: platform.to_string(),
-                    game_count: 0,
-                    status: skip_and_remove_cache(&cache_path, format!("{filename} not found")),
-                };
+                return SyncReport::without_games(
+                    platform,
+                    skip_and_remove_cache(&cache_path, format!("{filename} not found")),
+                );
             }
-            match cache::write_cache(&cache_path, &games, "heroic_cache") {
-                Ok(()) => SyncReport {
-                    platform: platform.to_string(),
-                    game_count: games.len(),
-                    status: SyncStatus::Ok,
-                },
-                Err(e) => SyncReport {
-                    platform: platform.to_string(),
-                    game_count: 0,
-                    status: SyncStatus::Error(e.to_string()),
-                },
-            }
+            write_and_report(platform, &cache_path, &games, "heroic_cache")
         })
         .collect()
 }
@@ -84,36 +109,17 @@ pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
 /// fails.
 pub fn sync_steam(config_path: &Path, cache_dir: &Path) -> SyncReport {
     let Some(cfg) = config::load_config(config_path) else {
-        return SyncReport {
-            platform: "steam".to_string(),
-            game_count: 0,
-            status: skip_and_remove_cache(
+        return SyncReport::without_games(
+            "steam",
+            skip_and_remove_cache(
                 &cache_dir.join("steam.json"),
                 "no config found, run `bouncer setup` first".to_string(),
             ),
-        };
+        );
     };
     match steam::fetch_steam_library(&cfg.steam_api_key, &cfg.steam_id) {
-        Ok(games) => {
-            let count = games.len();
-            match cache::write_cache(&cache_dir.join("steam.json"), &games, "steam_api") {
-                Ok(()) => SyncReport {
-                    platform: "steam".to_string(),
-                    game_count: count,
-                    status: SyncStatus::Ok,
-                },
-                Err(e) => SyncReport {
-                    platform: "steam".to_string(),
-                    game_count: 0,
-                    status: SyncStatus::Error(e.to_string()),
-                },
-            }
-        }
-        Err(e) => SyncReport {
-            platform: "steam".to_string(),
-            game_count: 0,
-            status: SyncStatus::Error(e),
-        },
+        Ok(games) => write_and_report("steam", &cache_dir.join("steam.json"), &games, "steam_api"),
+        Err(e) => SyncReport::without_games("steam", SyncStatus::Error(e)),
     }
 }
 
