@@ -100,3 +100,88 @@ fn test_sync_heroic_reports_platform_names() {
     assert!(platforms.contains(&"gog"));
     assert!(platforms.contains(&"amazon"));
 }
+
+#[test]
+fn test_sync_removes_cache_only_for_skipped_sources() {
+    struct Case {
+        platform: &'static str,
+        source_file: Option<&'static str>,
+        cache_survives: bool,
+        removal_noted: bool,
+    }
+    const CASES: &[Case] = &[
+        Case {
+            platform: "epic",
+            source_file: None,
+            cache_survives: false,
+            removal_noted: true,
+        },
+        Case {
+            platform: "gog",
+            source_file: None,
+            cache_survives: false,
+            removal_noted: true,
+        },
+        Case {
+            platform: "amazon",
+            source_file: None,
+            cache_survives: false,
+            removal_noted: true,
+        },
+        Case {
+            platform: "steam",
+            source_file: None,
+            cache_survives: false,
+            removal_noted: true,
+        },
+        Case {
+            platform: "epic",
+            source_file: Some(r#"{"library": [{"title": "Celeste", "app_name": "abc"}]}"#),
+            cache_survives: true,
+            removal_noted: false,
+        },
+    ];
+
+    let mut misses = Vec::new();
+    for case in CASES {
+        let heroic_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let cache_path = cache_dir.path().join(format!("{}.json", case.platform));
+        cache::write_cache(&cache_path, &[], "old").unwrap();
+        if let Some(contents) = case.source_file {
+            fs::write(heroic_dir.path().join("legendary_library.json"), contents).unwrap();
+        }
+        let config_path = cache_dir.path().join("nonexistent.json");
+
+        let reports = sync::sync_all(heroic_dir.path(), &config_path, cache_dir.path());
+        let report = reports
+            .iter()
+            .find(|r| r.platform == case.platform)
+            .unwrap();
+        let noted = matches!(&report.status, sync::SyncStatus::Skipped(r) if r.contains("removed cached library"));
+        let survives = cache_path.exists();
+        if survives != case.cache_survives || noted != case.removal_noted {
+            misses.push(format!(
+                "{} (source {:?}): cache_survives={survives} removal_noted={noted}",
+                case.platform,
+                case.source_file.is_some()
+            ));
+        }
+    }
+    assert!(misses.is_empty(), "misses:\n{}", misses.join("\n"));
+}
+
+#[test]
+fn test_sync_skip_without_existing_cache_does_not_note_removal() {
+    let heroic_dir = TempDir::new().unwrap();
+    let cache_dir = TempDir::new().unwrap();
+    let config_path = cache_dir.path().join("nonexistent.json");
+
+    for report in sync::sync_all(heroic_dir.path(), &config_path, cache_dir.path()) {
+        assert!(
+            matches!(&report.status, sync::SyncStatus::Skipped(r) if !r.contains("removed")),
+            "{} should be a plain skip",
+            report.platform
+        );
+    }
+}
