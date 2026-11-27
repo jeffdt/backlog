@@ -390,80 +390,113 @@ const FILTERS: [Filter; 4] = [
     Filter::Unplayed,
 ];
 
-const TAB_KEY_HINT: &str = "tab / shift-tab";
+/// Bouncer's own color: the frame border and its corner titles.
+const ACCENT: Color = Color::Magenta;
 
-/// Draws the filter tabs as three rows of folder tabs: the active tab is open
-/// to the content below, inactive tabs sit on a shared baseline. `counts` is
-/// indexed in `FILTERS` order. The key hint is right-aligned when it fits.
-fn tab_bar(active: Filter, counts: [usize; 4], width: u16) -> [Line<'static>; 3] {
-    let width = width as usize;
+/// The color that marks a filter wherever it is active: its name in the
+/// filter row and the section header and gutter below it.
+fn filter_color(filter: Filter) -> Color {
+    match filter {
+        Filter::All => Color::Magenta,
+        Filter::Queued => Color::Cyan,
+        Filter::Played => Color::Green,
+        Filter::Unplayed => Color::Yellow,
+    }
+}
+
+/// One line naming every filter with its row count; the active one is bold
+/// in its filter color, the rest dim. `counts` is indexed in `FILTERS` order.
+fn filter_row(active: Filter, counts: [usize; 4]) -> Line<'static> {
     let dim = Style::default().fg(Color::DarkGray);
-    let mut top = vec![Span::raw(" ")];
-    let mut mid = vec![Span::raw(" ")];
-    let mut bot = vec![Span::styled("─", dim)];
-    let mut used = 1;
-
-    for (filter, count) in FILTERS.into_iter().zip(counts) {
+    let mut spans = Vec::new();
+    for (i, (filter, count)) in FILTERS.into_iter().zip(counts).enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("   ·   ", dim));
+        }
+        if let Some(glyph) = filter.glyph() {
+            spans.push(Span::styled(
+                format!("{glyph} "),
+                Style::default().fg(filter_color(filter)),
+            ));
+        }
         let is_active = filter == active;
-        let border = if is_active {
-            Style::default().fg(Color::White)
+        let label_style = if is_active {
+            Style::default()
+                .fg(filter_color(filter))
+                .add_modifier(Modifier::BOLD)
         } else {
             dim
         };
-        let glyph = filter.glyph().map(|g| format!("{g} ")).unwrap_or_default();
-        let glyph_color = match filter {
-            Filter::Queued => Color::Cyan,
-            Filter::Played => Color::Green,
-            _ => Color::DarkGray,
-        };
-        let label = format!("{} {count}", filter.label());
-        let inner = 2 + glyph.chars().count() + label.chars().count();
-
-        top.push(Span::styled(format!("╭{}╮", "─".repeat(inner)), border));
-        top.push(Span::raw(" "));
-        mid.push(Span::styled("│ ", border));
-        mid.push(Span::styled(glyph, Style::default().fg(glyph_color)));
-        let label_style = if is_active {
-            border.add_modifier(Modifier::BOLD)
+        spans.push(Span::styled(filter.label(), label_style));
+        let count_color = if is_active {
+            Color::Gray
         } else {
-            border
+            Color::DarkGray
         };
-        mid.push(Span::styled(label, label_style));
-        mid.push(Span::styled(" │", border));
-        mid.push(Span::raw(" "));
-        let (l, fill, r) = if is_active {
-            ('╯', ' ', '╰')
-        } else {
-            ('┴', '─', '┴')
-        };
-        bot.push(Span::styled(
-            format!("{l}{}{r}", fill.to_string().repeat(inner)),
-            border,
+        spans.push(Span::styled(
+            format!(" {count}"),
+            Style::default().fg(count_color),
         ));
-        bot.push(Span::styled("─", dim));
-        used += inner + 3;
     }
-
-    let hint_len = TAB_KEY_HINT.chars().count();
-    if width >= used + 2 + hint_len {
-        mid.push(Span::raw(" ".repeat(width - used - hint_len)));
-        mid.push(Span::styled(TAB_KEY_HINT, dim));
-    } else {
-        mid.push(Span::raw(" ".repeat(width.saturating_sub(used))));
-    }
-    let pad = width.saturating_sub(used);
-    top.push(Span::raw(" ".repeat(pad)));
-    bot.push(Span::styled("─".repeat(pad), dim));
-    [Line::from(top), Line::from(mid), Line::from(bot)]
+    Line::from(spans)
 }
 
-/// The keybind hint for a filter; reordering is advertised only under the
-/// queued filter, and only keys that act on a selected row appear when rows exist.
-fn hint_text(filter: Filter, has_results: bool) -> String {
-    match (has_results, filter) {
-        (false, _) => "type to search".to_string(),
-        (true, Filter::Queued) => "↑↓ select   enter queue   ^p played   ^j/^k rank".to_string(),
-        (true, _) => "↑↓ select   enter queue   ^p played".to_string(),
+/// A bold section title followed by a rule in `color` running to `width`,
+/// with an optional dim `tail` right-aligned at the end.
+fn section_header(title: &str, color: Color, tail: Option<&str>, width: u16) -> Line<'static> {
+    let width = width as usize;
+    let title_len = title.chars().count();
+    let tail = tail
+        .map(|t| format!(" {t}"))
+        .filter(|t| title_len + 2 + t.chars().count() <= width)
+        .unwrap_or_default();
+    let gap = if width > title_len { " " } else { "" };
+    let rule = "─".repeat(width.saturating_sub(title_len + gap.len() + tail.chars().count()));
+    Line::from(vec![
+        Span::styled(
+            title.to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(gap),
+        Span::styled(rule, Style::default().fg(color)),
+        Span::styled(tail, Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+/// Styles a `"key desc · key desc"` hint so each key stands a step brighter
+/// than its description, matching the footer of rolomux and boomerang.
+fn styled_hint(text: &str) -> Line<'static> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut spans = Vec::new();
+    for (i, segment) in text.split(" · ").enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", dim));
+        }
+        match segment.split_once(' ') {
+            Some((key, desc)) => {
+                spans.push(Span::styled(
+                    key.to_string(),
+                    Style::default().fg(Color::Gray),
+                ));
+                spans.push(Span::styled(format!(" {desc}"), dim));
+            }
+            None => spans.push(Span::styled(segment.to_string(), dim)),
+        }
+    }
+    Line::from(spans)
+}
+
+/// The footer's key hint, naming only keys that do something right now:
+/// row keys only when rows exist, ranking only under the queued filter, and
+/// enter as "unqueue" when the selected game is already queued.
+fn hint_text(filter: Filter, has_rows: bool, selected_queued: bool) -> &'static str {
+    match (has_rows, filter == Filter::Queued, selected_queued) {
+        (false, _, _) => "type search · tab filter · ^r sync · esc quit",
+        (true, true, _) => {
+            "↑↓ move · enter unqueue · ^p played · ^j/^k rank · tab filter · esc quit"
+        }
+        (true, false, true) => "↑↓ move · enter unqueue · ^p played · tab filter · esc quit",
+        (true, false, false) => "↑↓ move · enter queue · ^p played · tab filter · esc quit",
     }
 }
 
@@ -505,33 +538,62 @@ fn format_sync_summary(reports: &[SyncReport], before_counts: &HashMap<String, u
         .join("  ")
 }
 
-/// One game row: optional rank, queue markers, name with match highlighting,
-/// padding to `name_width`, then the colored platform list. Row background is
-/// left to the caller.
+/// One game row exactly `width` columns wide: the section gutter in
+/// `gutter`, an optional rank, queue markers, the name with match
+/// highlighting (cut short with `…` when it would crowd the platforms), then
+/// the platform list flush against the right edge. Row background is left to
+/// the caller.
 fn result_row_spans(
     app: &App,
     name: &str,
     platforms: &[String],
     match_indices: &[u32],
-    name_width: usize,
+    width: usize,
     rank: Option<usize>,
+    gutter: Color,
 ) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut spans = vec![Span::styled("│", Style::default().fg(gutter))];
     if let Some(rank) = rank {
         spans.push(Span::styled(
-            format!("{rank:>2} "),
+            format!("{rank:<2} "),
             Style::default().fg(Color::DarkGray),
         ));
     }
 
     let state = app.queue.state(name);
     spans.extend(marker_spans(state));
+    let prefix_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+
+    let mut platform_spans = Vec::new();
+    for (i, platform) in platforms.iter().enumerate() {
+        if i > 0 {
+            platform_spans.push(Span::styled(" / ", Style::default().fg(Color::Gray)));
+        }
+        platform_spans.push(Span::styled(
+            platform.clone(),
+            Style::default()
+                .fg(platform_color(platform))
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    let platforms_len: usize = platform_spans
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum();
+
     let base_color = if state.played {
         Color::Gray
     } else {
         Color::White
     };
-    spans.extend(name.chars().enumerate().map(|(char_idx, ch)| {
+    let name_len = name.chars().count();
+    let name_budget = width.saturating_sub(prefix_len + platforms_len + 1);
+    let (shown, ellipsis) = if name_len <= name_budget {
+        (name_len, false)
+    } else {
+        (name_budget.saturating_sub(1), name_budget > 0)
+    };
+    spans.extend(name.chars().take(shown).enumerate().map(|(char_idx, ch)| {
         let style = if match_indices.contains(&(char_idx as u32)) {
             Style::default()
                 .fg(Color::Cyan)
@@ -541,150 +603,199 @@ fn result_row_spans(
         };
         Span::styled(ch.to_string(), style)
     }));
-
-    let padding = name_width.saturating_sub(name.chars().count()) + 2;
-    spans.push(Span::raw(" ".repeat(padding)));
-
-    for (i, platform) in platforms.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" / ", Style::default().fg(Color::Gray)));
-        }
-        spans.push(Span::styled(
-            platform.clone(),
-            Style::default().fg(platform_color(platform)),
-        ));
+    if ellipsis {
+        spans.push(Span::styled("…", Style::default().fg(base_color)));
     }
-    spans
+
+    let used = prefix_len + shown + usize::from(ellipsis) + platforms_len;
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    spans.extend(platform_spans);
+    clip_spans(spans, width)
+}
+
+/// Drops whatever runs past `width` columns, so a row never spills over on a
+/// terminal too narrow for its markers and platforms.
+fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let mut left = width;
+    let mut out = Vec::new();
+    for span in spans {
+        if left == 0 {
+            break;
+        }
+        let len = span.content.chars().count();
+        if len <= left {
+            left -= len;
+            out.push(span);
+        } else {
+            let kept: String = span.content.chars().take(left).collect();
+            out.push(Span::styled(kept, span.style));
+            left = 0;
+        }
+    }
+    out
 }
 
 const UP_NEXT_ROWS: usize = 3;
 
-/// Body of the blank default screen: the top of the queue for returning
-/// users, or a short key guide when the queue is empty.
-fn empty_state_lines(app: &App) -> Vec<Line<'static>> {
-    let header = |text: &'static str| {
-        Line::from(Span::styled(
-            text,
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::BOLD),
-        ))
-    };
+/// Body of the blank default screen, header first: the top of the queue for
+/// returning users, or a short key guide when the queue is empty.
+fn empty_state_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let queued = apply_filter(&app.games, &app.queue, Filter::Queued);
+    let dim = Style::default().fg(Color::DarkGray);
 
     if queued.is_empty() {
-        let key = |k: &str, desc: String| {
-            Line::from(vec![
-                Span::styled(format!("{k:<6}"), Style::default().fg(Color::Cyan)),
-                Span::styled(desc, Style::default().fg(Color::Gray)),
-            ])
+        let color = Color::Blue;
+        let key = |k: &str, desc: Vec<Span<'static>>| {
+            let mut spans = vec![
+                Span::styled("│", Style::default().fg(color)),
+                Span::styled(format!(" {k:<6}"), Style::default().fg(Color::Gray)),
+            ];
+            spans.extend(desc);
+            Line::from(spans)
         };
+        let text = |t: &str| Span::styled(t.to_string(), dim);
         return vec![
-            header("getting started"),
+            section_header("GETTING STARTED", color, None, width),
             key(
                 "type",
-                "fuzzy-search every game you own, across all stores".into(),
+                vec![text("fuzzy-search every game you own, across all stores")],
             ),
             key(
                 "enter",
-                format!("add the selected game to your queue {QUEUED_GLYPH}"),
+                vec![
+                    text("add the selected game to your queue "),
+                    Span::styled(QUEUED_GLYPH.to_string(), Style::default().fg(Color::Cyan)),
+                ],
             ),
-            key("^p", format!("mark it played {PLAYED_GLYPH}")),
+            key(
+                "^p",
+                vec![
+                    text("mark it played "),
+                    Span::styled(PLAYED_GLYPH.to_string(), Style::default().fg(Color::Green)),
+                ],
+            ),
             key(
                 "tab",
-                "switch between all / queued / played / unplayed".into(),
+                vec![text("switch between all / queued / played / unplayed")],
             ),
         ];
     }
 
+    let color = filter_color(Filter::All);
+    let tail = format!("{} queued", queued.len());
     let shown = &queued[..queued.len().min(UP_NEXT_ROWS)];
-    let name_width = shown
-        .iter()
-        .map(|e| e.name.chars().count())
-        .max()
-        .unwrap_or(0);
-    let mut lines = vec![header("up next")];
+    let mut lines = vec![section_header("UP NEXT", color, Some(&tail), width)];
     lines.extend(shown.iter().enumerate().map(|(i, e)| {
         Line::from(result_row_spans(
             app,
             &e.name,
             &e.platforms,
             &[],
-            name_width,
+            width as usize,
             Some(i + 1),
+            color,
         ))
     }));
     if queued.len() > shown.len() {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "+{} more \u{b7} tab to see the full queue",
-                queued.len() - shown.len()
+        lines.push(Line::from(vec![
+            Span::styled("│", Style::default().fg(color)),
+            Span::styled(
+                format!(
+                    "  +{} more \u{b7} tab to see the full queue",
+                    queued.len() - shown.len()
+                ),
+                dim,
             ),
-            Style::default().fg(Color::DarkGray),
-        )));
+        ]));
     }
     lines
 }
 
+/// A `‹ text ›` corner title in the accent color, with the one-dash gap
+/// from the corner that rolomux and boomerang use.
+fn corner_title(text: &str, bold: bool, dash_first: bool) -> Line<'static> {
+    let border = Style::default().fg(ACCENT);
+    let mut emphasis = border.add_modifier(Modifier::ITALIC);
+    if bold {
+        emphasis = emphasis.add_modifier(Modifier::BOLD);
+    }
+    let label = Span::styled(format!("‹ {text} ›"), emphasis);
+    let dash = Span::styled("─", border);
+    if dash_first {
+        Line::from(vec![dash, label])
+    } else {
+        Line::from(vec![label, dash]).right_aligned()
+    }
+}
+
+/// The section header title for a filter browsed with an empty search.
+fn browse_title(filter: Filter) -> &'static str {
+    match filter {
+        Filter::All => "LIBRARY",
+        Filter::Queued => "QUEUE",
+        Filter::Played => "PLAYED",
+        Filter::Unplayed => "UNPLAYED",
+    }
+}
+
 fn draw(f: &mut Frame, app: &App) {
-    let area = f.area();
-
-    let title = format!(" bouncer \u{2500}\u{2500} {} ", app.sync_age);
-
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(title)
-        .title_bottom(Line::from(" Esc to quit ").right_aligned())
+        .border_style(Style::default().fg(ACCENT))
+        .title(corner_title("bouncer", true, true))
+        .title(corner_title(&app.sync_age, false, false))
+        .title_bottom(corner_title(
+            &format!("v{}", env!("CARGO_PKG_VERSION")),
+            false,
+            false,
+        ))
         .padding(Padding::new(1, 1, 0, 0));
 
-    let inner = outer_block.inner(area);
-    f.render_widget(outer_block, area);
+    let inner = outer_block.inner(f.area());
+    f.render_widget(outer_block, f.area());
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // blank
-            Constraint::Length(3), // tab bar
-            Constraint::Length(1), // blank
-            Constraint::Length(3), // input box
-            Constraint::Length(1), // blank
-            Constraint::Min(1),    // body
-            Constraint::Length(1), // hint / sync status
-        ])
-        .split(inner);
+    let [
+        filter_area,
+        _,
+        search_area,
+        _,
+        header_area,
+        body_area,
+        status_area,
+        rule_area,
+        hint_area,
+    ] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let dim = Style::default().fg(Color::DarkGray);
 
-    let counts = view_counts(app);
-    let active_count = counts[FILTERS.iter().position(|&x| x == app.filter).unwrap_or(0)];
     f.render_widget(
-        Paragraph::new(tab_bar(app.filter, counts, chunks[1].width).to_vec()),
-        chunks[1],
+        Paragraph::new(filter_row(app.filter, view_counts(app))),
+        filter_area,
     );
 
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
-    let input_inner = input_block.inner(chunks[3]);
-    f.render_widget(input_block, chunks[3]);
-    let query_span = if app.input.is_empty() {
-        Span::styled(
-            format!("type to search {active_count} games"),
-            Style::default().fg(Color::DarkGray),
-        )
-    } else {
-        Span::styled(app.input.clone(), Style::default().fg(Color::White))
-    };
+    const SEARCH_PROMPT: &str = "search: ";
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(">", Style::default().fg(Color::Cyan)),
-            Span::raw(" "),
-            query_span,
+            Span::styled(SEARCH_PROMPT, dim),
+            Span::raw(app.input.clone()),
         ])),
-        input_inner,
+        search_area,
     );
-    let cursor_x = input_inner.x + 2 + app.input[..app.cursor_pos].chars().count() as u16;
-    f.set_cursor_position((cursor_x, input_inner.y));
+    let cursor_x = search_area.x
+        + SEARCH_PROMPT.len() as u16
+        + app.input[..app.cursor_pos].chars().count() as u16;
+    f.set_cursor_position((cursor_x, search_area.y));
 
     let show_empty_state = app.input.is_empty() && app.filter == Filter::All;
     let filtered = app.filtered();
@@ -693,87 +804,89 @@ fn draw(f: &mut Frame, app: &App) {
     } else {
         search::fuzzy_search(&app.input, &filtered)
     };
+    let selected = app.selected.min(results.len().saturating_sub(1));
+    let selected_queued = results
+        .get(selected)
+        .is_some_and(|r| app.queue.state(&r.game.name).queued);
 
     // A queue problem outranks the sync summary: it is the only state here the
     // user cannot regenerate by syncing again.
-    let (hint, hint_color) = match &app.status_message {
-        Some(message) => (message.clone(), Color::Red),
-        None => {
-            let hint = match &app.sync_state {
-                SyncState::Idle => hint_text(app.filter, !results.is_empty()),
-                SyncState::Syncing => "syncing...".to_string(),
-                SyncState::Done(reports) => format_sync_summary(reports, &app.sync_before_counts),
-            };
-            (hint, Color::DarkGray)
+    let status = match (&app.status_message, &app.sync_state) {
+        (Some(message), _) => Span::styled(message.clone(), Style::default().fg(Color::Red)),
+        (None, SyncState::Syncing) => Span::styled("syncing...", dim),
+        (None, SyncState::Done(reports)) => {
+            Span::styled(format_sync_summary(reports, &app.sync_before_counts), dim)
         }
+        (None, SyncState::Idle) => Span::raw(""),
     };
-    let status_line = Line::from(vec![Span::styled(hint, Style::default().fg(hint_color))]);
-    f.render_widget(Paragraph::new(status_line), chunks[6]);
+    f.render_widget(Paragraph::new(Line::from(status)), status_area);
+    f.render_widget(
+        Paragraph::new(Span::styled("─".repeat(rule_area.width as usize), dim)),
+        rule_area,
+    );
+    f.render_widget(
+        Paragraph::new(styled_hint(hint_text(
+            app.filter,
+            !results.is_empty(),
+            selected_queued,
+        ))),
+        hint_area,
+    );
 
-    let results_area = chunks[5];
     if show_empty_state {
-        f.render_widget(Paragraph::new(empty_state_lines(app)), results_area);
-        return;
-    }
-    if results.is_empty() {
+        let mut lines = empty_state_lines(app, body_area.width);
+        let header = lines.remove(0);
+        f.render_widget(Paragraph::new(header), header_area);
+        f.render_widget(Paragraph::new(lines), body_area);
         return;
     }
 
-    let max_selected = results.len() - 1;
-    let selected = app.selected.min(max_selected);
-    let visible_rows = results_area.height as usize;
-
-    let scroll_offset = if selected >= visible_rows {
-        selected - visible_rows + 1
+    let color = filter_color(app.filter);
+    let (title, tail) = if app.input.is_empty() {
+        (
+            browse_title(app.filter),
+            format!("{} games", filtered.len()),
+        )
     } else {
-        0
+        (
+            "RESULTS",
+            format!("{} of {}", results.len(), filtered.len()),
+        )
     };
+    f.render_widget(
+        Paragraph::new(section_header(title, color, Some(&tail), header_area.width)),
+        header_area,
+    );
 
-    // Cap name length to leave room for the platform label
-    let available_width = results_area.width as usize;
-    let max_name_len = results
-        .iter()
-        .map(|r| r.game.name.chars().count())
-        .max()
-        .unwrap_or(0)
-        .min(available_width.saturating_sub(13));
-
+    let visible_rows = body_area.height as usize;
+    let scroll_offset = (selected + 1).saturating_sub(visible_rows);
     for (i, result) in results
         .iter()
         .skip(scroll_offset)
         .take(visible_rows)
         .enumerate()
     {
-        let row_y = results_area.y + i as u16;
-        if row_y >= results_area.y + results_area.height {
-            break;
-        }
-
-        let abs_idx = i + scroll_offset;
-        let row_area = Rect::new(results_area.x, row_y, results_area.width, 1);
-
         let rank = if app.filter == Filter::Queued {
             app.queue.rank(&result.game.name)
         } else {
             None
         };
-        let spans = result_row_spans(
+        let mut spans = result_row_spans(
             app,
             &result.game.name,
             &result.game.platforms,
             &result.match_indices,
-            max_name_len,
+            body_area.width as usize,
             rank,
+            color,
         );
-
-        let mut row_style = Style::default();
-        if abs_idx == selected {
-            row_style = row_style.bg(Color::DarkGray);
-        } else if abs_idx % 2 == 0 {
-            row_style = row_style.bg(Color::Black);
+        if i + scroll_offset == selected {
+            for span in spans.iter_mut().skip(1) {
+                span.style = span.style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+            }
         }
-
-        f.render_widget(Paragraph::new(Line::from(spans)).style(row_style), row_area);
+        let row_area = Rect::new(body_area.x, body_area.y + i as u16, body_area.width, 1);
+        f.render_widget(Paragraph::new(Line::from(spans)), row_area);
     }
 }
 
@@ -990,18 +1103,109 @@ mod tests {
     }
 
     #[test]
+    fn result_rows_put_gutter_first_and_platforms_at_the_right_edge() {
+        let dir = TempDir::new().unwrap();
+        let long = "Eye of the Beholder III: Assault on Myth Drannor";
+        let mut app = test_app(&dir, &["Hollow Knight", long]);
+        queue_all(&mut app, &["Hollow Knight"]);
+        type RowCase<'a> = (&'a str, &'a [&'a str], usize, Option<usize>, &'a str);
+        let cases: &[RowCase] = &[
+            (
+                "Hollow Knight",
+                &["steam"],
+                30,
+                None,
+                "│»  Hollow Knight        steam",
+            ),
+            (
+                "Hollow Knight",
+                &["epic", "gog"],
+                32,
+                Some(1),
+                "│1  »  Hollow Knight  epic / gog",
+            ),
+            (
+                "Hollow Knight",
+                &["steam"],
+                32,
+                Some(12),
+                "│12 »  Hollow Knight       steam",
+            ),
+            (long, &["gog"], 30, None, "│   Eye of the Beholder I… gog"),
+        ];
+        let mut misses = Vec::new();
+        for &(name, platforms, width, rank, want) in cases {
+            let platforms: Vec<String> = platforms.iter().map(|p| p.to_string()).collect();
+            let got: String =
+                result_row_spans(&app, name, &platforms, &[], width, rank, Color::Magenta)
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect();
+            if got != want || got.chars().count() != width {
+                misses.push(format!("{got:?} != {want:?}"));
+            }
+        }
+        assert!(misses.is_empty(), "{misses:#?}");
+
+        let spans = result_row_spans(
+            &app,
+            "Hollow Knight",
+            &["steam".into()],
+            &[],
+            30,
+            None,
+            Color::Cyan,
+        );
+        assert_eq!(spans[0].content, "│");
+        assert_eq!(spans[0].style.fg, Some(Color::Cyan));
+        let steam = spans.iter().find(|s| s.content == "steam").unwrap();
+        assert!(steam.style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(steam.style.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn result_rows_survive_widths_too_small_for_the_platform() {
+        let dir = TempDir::new().unwrap();
+        let app = test_app(&dir, &["Hollow Knight"]);
+        for width in 0..12 {
+            let row = result_row_spans(
+                &app,
+                "Hollow Knight",
+                &["steam".into()],
+                &[0],
+                width,
+                Some(3),
+                Color::Magenta,
+            );
+            let len: usize = row.iter().map(|s| s.content.chars().count()).sum();
+            assert!(len <= width.max(1), "width {width}: {len}");
+        }
+    }
+
+    #[test]
     fn empty_state_shows_up_next_with_top_three_and_more_count() {
         let dir = TempDir::new().unwrap();
         let mut app = test_app(&dir, &["A", "B", "C", "D", "E"]);
         queue_all(&mut app, &["A", "B", "C", "D", "E"]);
-        let t = texts(&empty_state_lines(&app));
+        let lines = empty_state_lines(&app, 60);
+        let t = texts(&lines);
         assert_eq!(t.len(), 5);
-        assert!(t[0].contains("up next"));
+        assert!(t[0].starts_with("UP NEXT ─"), "{}", t[0]);
+        assert!(t[0].ends_with("─ 5 queued"), "{}", t[0]);
+        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Magenta));
         for (i, name) in ["A", "B", "C"].iter().enumerate() {
-            assert!(t[i + 1].contains(&format!(" {} ", i + 1)), "{}", t[i + 1]);
+            assert!(
+                t[i + 1].starts_with(&format!("│{}  ", i + 1)),
+                "{}",
+                t[i + 1]
+            );
             assert!(t[i + 1].contains(name));
         }
-        assert_eq!(t[4].trim(), "+2 more \u{b7} tab to see the full queue");
+        assert_eq!(
+            t[4].trim_end(),
+            "│  +2 more \u{b7} tab to see the full queue"
+        );
+        assert_eq!(lines[4].spans[0].style.fg, Some(Color::Magenta));
     }
 
     #[test]
@@ -1009,7 +1213,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut app = test_app(&dir, &["A", "B", "C", "D"]);
         queue_all(&mut app, &["A", "B", "C"]);
-        assert_eq!(empty_state_lines(&app).len(), 4);
+        assert_eq!(empty_state_lines(&app, 60).len(), 4);
     }
 
     #[test]
@@ -1017,28 +1221,31 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut app = test_app(&dir, &["A", "B", "C", "D"]);
         queue_all(&mut app, &["Gone", "A", "B", "C", "D"]);
-        let t = texts(&empty_state_lines(&app));
+        let t = texts(&empty_state_lines(&app, 60));
         assert!(!t.iter().any(|l| l.contains("Gone")));
         assert_eq!(t.len(), 5);
-        assert!(t[4].starts_with("+1 more"));
+        assert!(t[4].starts_with("│  +1 more"), "{}", t[4]);
     }
 
     #[test]
     fn empty_state_shows_getting_started_when_queue_is_empty() {
         let dir = TempDir::new().unwrap();
         let app = test_app(&dir, &["A"]);
-        let t = texts(&empty_state_lines(&app));
+        let lines = empty_state_lines(&app, 60);
+        let t = texts(&lines);
         let expected = [
             ("type", "fuzzy-search every game you own, across all stores"),
             ("enter", "add the selected game to your queue \u{bb}"),
             ("^p", "mark it played \u{2713}"),
             ("tab", "switch between all / queued / played / unplayed"),
         ];
-        assert!(t[0].contains("getting started"));
+        assert!(t[0].starts_with("GETTING STARTED ─"), "{}", t[0]);
+        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Blue));
         assert_eq!(t.len(), 5);
         for (i, (key, desc)) in expected.iter().enumerate() {
-            assert!(t[i + 1].starts_with(key), "{}", t[i + 1]);
+            assert!(t[i + 1].starts_with(&format!("│ {key:<6}")), "{}", t[i + 1]);
             assert!(t[i + 1].ends_with(desc), "{}", t[i + 1]);
+            assert_eq!(lines[i + 1].spans[0].style.fg, Some(Color::Blue));
         }
     }
 
@@ -1051,21 +1258,122 @@ mod tests {
             .collect()
     }
 
+    fn render_buffer(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
     #[test]
-    fn draw_renders_tabs_placeholder_and_title_without_game_count() {
+    fn draw_renders_family_chrome() {
         let dir = TempDir::new().unwrap();
         let app = test_app(&dir, &["A", "B", "C"]);
         let rows = render(&app, 100, 30);
+        assert!(rows[0].starts_with("╭─‹ bouncer ›─"), "{}", rows[0]);
+        assert!(rows[0].ends_with("‹ never synced ›─╮"), "{}", rows[0]);
+        let version = format!("‹ v{} ›─╯", env!("CARGO_PKG_VERSION"));
+        assert!(rows[29].ends_with(&version), "{}", rows[29]);
+        assert!(rows[1].contains("all 3   ·   » queued 0"), "{}", rows[1]);
+        assert!(rows[3].starts_with("│ search: "), "{}", rows[3]);
+        assert!(rows[5].contains("GETTING STARTED ─"), "{}", rows[5]);
+        let rule = rows[27].trim_matches(|c| c == '│' || c == ' ');
         assert!(
-            rows[0].contains("bouncer \u{2500}\u{2500} never synced"),
+            !rule.is_empty() && rule.chars().all(|c| c == '─'),
             "{}",
-            rows[0]
+            rows[27]
         );
-        assert!(!rows[0].contains("games ("));
-        assert!(rows[2].contains("\u{256d}\u{2500}\u{2500}"), "{}", rows[2]);
-        assert!(rows.iter().any(|r| r.contains("> type to search 3 games")));
-        assert!(rows[28].contains("type to search"), "{}", rows[28]);
-        assert!(!rows[28].contains(" all "));
+        assert!(
+            rows[28].contains("type search · tab filter · ^r sync · esc quit"),
+            "{}",
+            rows[28]
+        );
+        let buf = render_buffer(&app, 100, 30);
+        assert_eq!(buf[(0, 0)].fg, Color::Magenta);
+    }
+
+    #[test]
+    fn draw_shows_results_header_with_count_while_searching() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["Hollow Knight", "Hades", "Celeste"]);
+        app.input = "hol".into();
+        app.cursor_pos = 3;
+        let rows = render(&app, 100, 30);
+        assert!(rows[5].contains("RESULTS ─"), "{}", rows[5]);
+        assert!(
+            rows[5].trim_end_matches(['│', ' ']).ends_with(" of 3"),
+            "{}",
+            rows[5]
+        );
+        assert!(rows[6].starts_with("│ │"), "{}", rows[6]);
+        assert!(rows[6].contains("Hollow Knight"), "{}", rows[6]);
+        assert!(
+            rows[6].trim_end_matches(['│', ' ']).ends_with("steam"),
+            "{}",
+            rows[6]
+        );
+        assert!(rows[28].contains("enter queue"), "{}", rows[28]);
+    }
+
+    #[test]
+    fn draw_colors_the_queued_view_cyan_and_ranks_its_rows() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        queue_all(&mut app, &["B", "A"]);
+        app.filter = Filter::Queued;
+        let rows = render(&app, 100, 30);
+        assert!(rows[5].contains("QUEUE ─"), "{}", rows[5]);
+        assert!(
+            rows[5].trim_end_matches(['│', ' ']).ends_with("2 games"),
+            "{}",
+            rows[5]
+        );
+        assert!(rows[6].starts_with("│ │1  »  B"), "{}", rows[6]);
+        assert!(rows[7].starts_with("│ │2  »  A"), "{}", rows[7]);
+        assert!(rows[28].contains("enter unqueue"), "{}", rows[28]);
+        assert!(rows[28].contains("^j/^k rank"), "{}", rows[28]);
+        let buf = render_buffer(&app, 100, 30);
+        assert_eq!(buf[(2, 5)].fg, Color::Cyan);
+        assert_eq!(buf[(2, 6)].fg, Color::Cyan);
+    }
+
+    #[test]
+    fn draw_puts_queue_errors_in_the_status_line() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("queue.json"), "{ not json").unwrap();
+        let app = test_app(&dir, &["A"]);
+        let buf = render_buffer(&app, 100, 30);
+        let row: String = (0..100)
+            .map(|x| buf[(x, 26)].symbol().to_string())
+            .collect();
+        assert!(!row.trim_matches(['│', ' ']).is_empty(), "status row empty");
+        assert_eq!(buf[(2, 26)].fg, Color::Red);
+    }
+
+    #[test]
+    fn draw_keeps_the_highlight_on_a_selection_below_the_fold() {
+        let dir = TempDir::new().unwrap();
+        let names: Vec<String> = (0..40).map(|i| format!("Game {i:02}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut app = test_app(&dir, &refs);
+        app.input = "game".into();
+        app.cursor_pos = 4;
+        app.selected = 35;
+        let expected = search::fuzzy_search(&app.input, &app.filtered())[35]
+            .game
+            .name
+            .clone();
+        let buf = render_buffer(&app, 100, 30);
+        let highlighted: Vec<String> = (0..30)
+            .filter(|&y| buf[(3, y)].bg == Color::DarkGray)
+            .map(|y| (0..100).map(|x| buf[(x, y)].symbol().to_string()).collect())
+            .collect();
+        assert_eq!(highlighted.len(), 1, "{highlighted:#?}");
+        assert!(highlighted[0].contains(&expected), "{}", highlighted[0]);
+        assert_ne!(
+            buf[(2, 6)].bg,
+            Color::DarkGray,
+            "gutter stays out of the bar"
+        );
     }
 
     #[test]
@@ -1079,71 +1387,116 @@ mod tests {
     }
 
     #[test]
-    fn tab_bar_draws_folder_tabs_with_the_active_one_open() {
-        let lines = tab_bar(Filter::All, [1543, 5, 12, 1531], 100);
-        let [top, mid, bot] = lines.map(|l| line_text(&l));
-        assert!(top.starts_with(" ╭──────────╮ ╭────────────╮"));
-        assert!(mid.starts_with(" │ all 1543 │ │ » queued 5 │ │ ✓ played 12 │ │ unplayed 1531 │"));
-        assert!(mid.trim_end().ends_with("tab / shift-tab"));
-        assert!(bot.starts_with("─╯          ╰─┴────────────┴─┴"));
-        for l in [&top, &mid, &bot] {
-            assert_eq!(l.chars().count(), 100);
-        }
-    }
-
-    #[test]
-    fn tab_bar_opens_whichever_tab_is_active() {
-        let bot = line_text(&tab_bar(Filter::Queued, [1543, 5, 12, 1531], 100)[2]);
-        assert!(bot.starts_with("─┴──────────┴─╯            ╰─┴"));
-    }
-
-    #[test]
-    fn tab_bar_drops_the_key_hint_when_too_narrow() {
-        let lines = tab_bar(Filter::All, [1543, 5, 12, 1531], 70).map(|l| line_text(&l));
-        assert!(!lines[1].contains("tab / shift-tab"));
-        for l in &lines {
-            assert_eq!(l.chars().count(), 70);
-        }
-    }
-
-    #[test]
-    fn tab_bar_colors_active_white_and_inactive_dark_gray() {
-        let mid = &tab_bar(Filter::All, [1543, 5, 12, 1531], 100)[1];
-        let fg = |content: &str| {
-            mid.spans
+    fn filter_row_colors_only_the_active_filter() {
+        let cases: &[(Filter, &str, Color)] = &[
+            (Filter::All, "all", Color::Magenta),
+            (Filter::Queued, "queued", Color::Cyan),
+            (Filter::Played, "played", Color::Green),
+            (Filter::Unplayed, "unplayed", Color::Yellow),
+        ];
+        let labels = ["all", "queued", "played", "unplayed"];
+        let mut misses = Vec::new();
+        for &(active, label, color) in cases {
+            let line = filter_row(active, [1543, 4, 2, 1541]);
+            let text = line_text(&line);
+            if text != "all 1543   ·   » queued 4   ·   ✓ played 2   ·   unplayed 1541" {
+                misses.push(format!("{active:?}: {text}"));
+            }
+            let span = line.spans.iter().find(|s| s.content == label).unwrap();
+            if span.style.fg != Some(color) || !span.style.add_modifier.contains(Modifier::BOLD) {
+                misses.push(format!("{active:?}: active label style {:?}", span.style));
+            }
+            for other in line
+                .spans
                 .iter()
-                .find(|s| s.content == content)
-                .unwrap_or_else(|| panic!("no span {content:?}"))
-                .style
-                .fg
-        };
-        let first_border = mid.spans.iter().find(|s| s.content == "│ ").unwrap();
-        assert_eq!(first_border.style.fg, Some(Color::White));
-        assert_eq!(fg("all 1543"), Some(Color::White));
-        let active_label = mid.spans.iter().find(|s| s.content == "all 1543").unwrap();
-        assert!(active_label.style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(fg("queued 5"), Some(Color::DarkGray));
-        assert_eq!(fg("» "), Some(Color::Cyan));
-        assert_eq!(fg("✓ "), Some(Color::Green));
-        assert_eq!(fg("tab / shift-tab"), Some(Color::DarkGray));
+                .filter(|s| labels.contains(&s.content.as_ref()) && s.content != label)
+            {
+                if other.style.fg != Some(Color::DarkGray) {
+                    misses.push(format!(
+                        "{active:?}: inactive {} is {:?}",
+                        other.content, other.style.fg
+                    ));
+                }
+            }
+        }
+        assert!(misses.is_empty(), "{misses:#?}");
+    }
+
+    #[test]
+    fn section_header_fills_width_with_rule_and_right_aligned_tail() {
+        let l = section_header("RESULTS", Color::Magenta, Some("11 of 1543"), 40);
+        let t = line_text(&l);
+        assert_eq!(t.chars().count(), 40);
+        assert!(t.starts_with("RESULTS ─"), "{t}");
+        assert!(t.ends_with("─ 11 of 1543"), "{t}");
+        assert_eq!(l.spans[0].style.fg, Some(Color::Magenta));
+        assert!(l.spans[0].style.add_modifier.contains(Modifier::BOLD));
+        let bare = line_text(&section_header("GETTING STARTED", Color::Blue, None, 30));
+        assert_eq!(bare.chars().count(), 30);
+        assert!(bare.ends_with('─'), "{bare}");
+        let narrow = line_text(&section_header(
+            "GETTING STARTED",
+            Color::Blue,
+            Some("x"),
+            5,
+        ));
+        assert!(narrow.chars().count() <= 15, "{narrow}");
+    }
+
+    #[test]
+    fn styled_hint_grays_keys_and_dims_descriptions() {
+        let l = styled_hint("↑↓ move · esc quit");
+        assert_eq!(line_text(&l), "↑↓ move · esc quit");
+        let fg = |c: &str| l.spans.iter().find(|s| s.content == c).unwrap().style.fg;
+        assert_eq!(fg("↑↓"), Some(Color::Gray));
+        assert_eq!(fg(" move"), Some(Color::DarkGray));
+        assert_eq!(fg(" · "), Some(Color::DarkGray));
+        assert_eq!(fg("esc"), Some(Color::Gray));
     }
 
     #[test]
     fn hint_text_only_names_keys_that_apply() {
-        const CASES: &[(Filter, bool, &str)] = &[
-            (Filter::All, false, "type to search"),
-            (Filter::All, true, "↑↓ select   enter queue   ^p played"),
-            (Filter::Played, true, "↑↓ select   enter queue   ^p played"),
+        const CASES: &[(Filter, bool, bool, &str)] = &[
+            (
+                Filter::All,
+                false,
+                false,
+                "type search · tab filter · ^r sync · esc quit",
+            ),
+            (
+                Filter::Queued,
+                false,
+                false,
+                "type search · tab filter · ^r sync · esc quit",
+            ),
+            (
+                Filter::All,
+                true,
+                false,
+                "↑↓ move · enter queue · ^p played · tab filter · esc quit",
+            ),
+            (
+                Filter::All,
+                true,
+                true,
+                "↑↓ move · enter unqueue · ^p played · tab filter · esc quit",
+            ),
+            (
+                Filter::Played,
+                true,
+                false,
+                "↑↓ move · enter queue · ^p played · tab filter · esc quit",
+            ),
             (
                 Filter::Queued,
                 true,
-                "↑↓ select   enter queue   ^p played   ^j/^k rank",
+                true,
+                "↑↓ move · enter unqueue · ^p played · ^j/^k rank · tab filter · esc quit",
             ),
-            (Filter::Queued, false, "type to search"),
         ];
         let misses: Vec<_> = CASES
             .iter()
-            .filter(|(f, r, want)| hint_text(*f, *r) != *want)
+            .filter(|(f, r, q, want)| hint_text(*f, *r, *q) != *want)
             .collect();
         assert!(misses.is_empty(), "{misses:?}");
     }
