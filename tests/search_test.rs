@@ -64,6 +64,15 @@ const TITLES: &[&str] = &[
     "Æon Flux",
     "Straße Racer",
     "Œuvre Collection",
+    "Grand Theft Auto V Enhanced",
+    "Grand Theft Auto IV: The Complete Edition",
+    "Gunslugs 3: Rogue Tactics",
+    "Gas Station Simulator",
+    "Gravitar: Recharged",
+    "Death's Gambit - Afterlife",
+    "Half-Life 2",
+    "Trine 2",
+    "Assassin’s Creed",
 ];
 
 fn library() -> Vec<LibraryEntry> {
@@ -189,6 +198,49 @@ const MUST_FIND: &[(&str, &[&str])] = &[
         "baldrus gate",
         &["Baldur's Gate 3", "Baldur's Gate: Enhanced Edition"],
     ),
+    // Accented and uppercase queries fold the same way titles do.
+    ("OKAMI", &["Ōkami HD"]),
+    ("ōkami", &["Ōkami HD"]),
+    ("łódź", &["Łódź Story"]),
+    ("æon", &["Æon Flux"]),
+    ("straße", &["Straße Racer"]),
+    // Word-initial acronyms.
+    (
+        "gta",
+        &[
+            "Grand Theft Auto V",
+            "Grand Theft Auto V Enhanced",
+            "Grand Theft Auto IV: The Complete Edition",
+            "Grand Theft Auto: Vice City",
+            "Defense Grid: The Awakening",
+        ],
+    ),
+    (
+        "tr",
+        &[
+            "Tomb Raider",
+            "Rise of the Tomb Raider",
+            "Shadow of the Tomb Raider: Definitive Edition",
+            "Trine 2",
+            "Straße Racer",
+        ],
+    ),
+    ("ttr", &["Rise of the Tomb Raider"]),
+    ("GTA", &["Grand Theft Auto V"]),
+    ("ksp", &["Kerbal Space Program"]),
+    ("p2", &["Portal 2"]),
+    ("hl", &["Half-Life 2", "Half-Life Deathmatch: Source"]),
+    ("hk", &["Hollow Knight", "Hollow Knight: Silksong"]),
+    ("ak", &["Batman™: Arkham Knight"]),
+    ("xcs", &["XCOM®: Chimera Squad"]),
+    ("oh", &["Ōkami HD"]),
+    ("dga", &["Death's Gambit - Afterlife"]),
+    ("ac", &["Assassin’s Creed"]),
+    ("bg3", &["Baldur's Gate 3"]),
+    ("swkotor", &["Star Wars: Knights of the Old Republic"]),
+    ("gta vice", &["Grand Theft Auto: Vice City"]),
+    // Two chars with no literal or acronym hit still fall back to fuzzy.
+    ("kp", &["Kerbal Space Program"]),
 ];
 
 /// (query, titles that must NOT appear in the results)
@@ -240,8 +292,14 @@ const MUST_NOT_FIND: &[(&str, &[&str])] = &[
         &[
             "Guacamelee! Super Turbo Championship Edition",
             "Baldur's Gate: Enhanced Edition",
+            "Gunslugs 3: Rogue Tactics",
+            "Gas Station Simulator",
+            "Gravitar: Recharged",
+            "Death's Gambit - Afterlife",
         ],
     ),
+    ("ksp", &["Kizuna Encounter: Super Tag Battle"]),
+    ("hl", &["Hellblade: Senua's Sacrifice"]),
 ];
 
 /// (query, title that must rank first)
@@ -262,6 +320,46 @@ const RANKS_FIRST: &[(&str, &str)] = &[
     ("portla", "Portal"),
     ("cyberpnuk", "Cyberpunk 2077"),
     ("okami", "Ōkami HD"),
+    ("tr", "Tomb Raider"),
+    ("ksp", "Kerbal Space Program"),
+    ("p2", "Portal 2"),
+    ("xcs", "XCOM®: Chimera Squad"),
+    ("ttr", "Rise of the Tomb Raider"),
+    ("bg3", "Baldur's Gate 3"),
+];
+
+/// (query, titles that must all appear, titles they must outrank when present)
+const RANKS_ABOVE: &[(&str, &[&str], &[&str])] = &[
+    (
+        "gta",
+        &[
+            "Grand Theft Auto V",
+            "Grand Theft Auto V Enhanced",
+            "Grand Theft Auto IV: The Complete Edition",
+            "Grand Theft Auto: Vice City",
+        ],
+        &[
+            "Defense Grid: The Awakening",
+            "Gas Station Simulator",
+            "Gravitar: Recharged",
+        ],
+    ),
+    (
+        "tr",
+        &["Tomb Raider"],
+        &[
+            "Rise of the Tomb Raider",
+            "Shadow of the Tomb Raider: Definitive Edition",
+            "Trine 2",
+            "Straße Racer",
+            "Schnellfahrstrecke Köln-Aachen",
+        ],
+    ),
+    (
+        "hl",
+        &["Half-Life 2", "Half-Life Deathmatch: Source"],
+        &["Hollow Knight"],
+    ),
 ];
 
 /// (query, the exact result set) for letters that only match once folded to
@@ -320,7 +418,31 @@ const HIGHLIGHTS: &[(&str, &str, &[u32])] = &[
         "Tomb Raider",
         &[0, 1, 2, 3, 5, 6, 7, 8, 9, 10],
     ),
+    ("gta", "Grand Theft Auto V", &[0, 6, 12]),
+    ("gta", "Defense Grid: The Awakening", &[8, 14, 18]),
+    ("tr", "Tomb Raider", &[0, 5]),
+    ("tr", "Rise of the Tomb Raider", &[12, 17]),
+    ("ak", "Batman™: Arkham Knight", &[9, 16]),
+    ("xcs", "XCOM®: Chimera Squad", &[0, 7, 15]),
+    ("oh", "Ōkami HD", &[0, 6]),
+    ("dga", "Death's Gambit - Afterlife", &[0, 8, 17]),
+    ("ac", "Assassin’s Creed", &[0, 11]),
+    ("p2", "Portal 2", &[0, 7]),
+    ("ae", "Æon Flux", &[0]),
 ];
+
+/// Every query used by any table, for invariant checks that apply to all of them.
+fn all_queries() -> Vec<&'static str> {
+    MUST_FIND
+        .iter()
+        .chain(MUST_NOT_FIND)
+        .chain(FOLDS_TO_EXACTLY)
+        .map(|(q, _)| *q)
+        .chain(RANKS_FIRST.iter().map(|(q, _)| *q))
+        .chain(RANKS_ABOVE.iter().map(|(q, _, _)| *q))
+        .chain(HIGHLIGHTS.iter().map(|(q, _, _)| *q))
+        .collect()
+}
 
 #[test]
 fn highlights_exact_characters() {
@@ -390,13 +512,8 @@ fn ranks_best_title_first() {
 #[test]
 fn results_are_sorted_with_valid_highlights() {
     let library = library();
-    let queries = MUST_FIND
-        .iter()
-        .chain(MUST_NOT_FIND)
-        .map(|(q, _)| *q)
-        .chain(RANKS_FIRST.iter().map(|(q, _)| *q));
     let mut failures = Vec::new();
-    for query in queries {
+    for query in all_queries() {
         let results = search::fuzzy_search(query, &library);
         if results.windows(2).any(|w| w[0].score < w[1].score) {
             failures.push(format!("{query:?}: scores not descending"));
@@ -444,4 +561,47 @@ fn cross_store_dupe_yields_single_result() {
     let results = search::fuzzy_search("card shark", &library);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].game.platforms, vec!["epic", "steam"]);
+}
+
+#[test]
+fn ranks_titles_above_others() {
+    let library = library();
+    let mut failures = Vec::new();
+    for (query, above, below) in RANKS_ABOVE {
+        let names = result_names(query, &library);
+        let rank = |title: &str| names.iter().position(|n| *n == title);
+        let mut worst = None;
+        for title in *above {
+            match rank(title) {
+                Some(position) => worst = worst.max(Some(position)),
+                None => failures.push(format!("{query:?} should find {title:?}, got {names:?}")),
+            }
+        }
+        for title in *below {
+            if let (Some(worst), Some(position)) = (worst, rank(title))
+                && position < worst
+            {
+                failures.push(format!(
+                    "{query:?} should rank {above:?} above {title:?}, got {names:?}"
+                ));
+            }
+        }
+    }
+    assert_no_failures(failures);
+}
+
+#[test]
+fn no_duplicate_results() {
+    let library = library();
+    let mut failures = Vec::new();
+    for query in all_queries() {
+        let mut names = result_names(query, &library);
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        if names.len() != total {
+            failures.push(format!("{query:?} returned a title more than once"));
+        }
+    }
+    assert_no_failures(failures);
 }
