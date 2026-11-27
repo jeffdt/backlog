@@ -28,7 +28,7 @@ pub struct SyncReport {
 }
 
 impl SyncReport {
-    fn without_games(platform: &str, status: SyncStatus) -> Self {
+    pub(crate) fn without_games(platform: &str, status: SyncStatus) -> Self {
         SyncReport {
             platform: platform.to_string(),
             game_count: 0,
