@@ -251,3 +251,52 @@ fn test_sync_heroic_reports_added_and_removed_titles() {
     }
     assert!(misses.is_empty(), "\n{}", misses.join("\n"));
 }
+
+#[test]
+fn test_sync_amazon_prefers_nile_library_over_heroic_cache() {
+    // (Nile library.json contents, Heroic nile_library.json contents, expected titles, expected source)
+    type Row = (
+        Option<&'static str>,
+        Option<&'static str>,
+        &'static [&'static str],
+        &'static str,
+    );
+    const HEROIC: &str = r#"{"library": [{"title": "The Dig", "app_name": "amzn1"}]}"#;
+    const NILE: &str = r#"[{"state": "LIVE", "product": {"title": "Castle on the Coast"}}]"#;
+    const CASES: &[Row] = &[
+        (Some(NILE), Some(HEROIC), &["Castle on the Coast"], "nile"),
+        (Some(NILE), None, &["Castle on the Coast"], "nile"),
+        (None, Some(HEROIC), &["The Dig"], "heroic_cache"),
+        (Some("[]"), Some(HEROIC), &["The Dig"], "heroic_cache"),
+        (Some("not json"), Some(HEROIC), &["The Dig"], "heroic_cache"),
+        (Some("[]"), Some(r#"{"library": []}"#), &[], "heroic_cache"),
+    ];
+
+    let mut misses = Vec::new();
+    for (nile, heroic, expected, expected_source) in CASES {
+        let root = TempDir::new().unwrap();
+        let store_cache = root.path().join("store_cache");
+        fs::create_dir_all(&store_cache).unwrap();
+        if let Some(contents) = nile {
+            let nile_dir = root.path().join("nile_config").join("nile");
+            fs::create_dir_all(&nile_dir).unwrap();
+            fs::write(nile_dir.join("library.json"), contents).unwrap();
+        }
+        if let Some(contents) = heroic {
+            fs::write(store_cache.join("nile_library.json"), contents).unwrap();
+        }
+        let cache_dir = TempDir::new().unwrap();
+
+        sync::sync_heroic(&store_cache, cache_dir.path());
+        let cached = cache::read_cache(&cache_dir.path().join("amazon.json")).unwrap();
+        let names: Vec<&str> = cached.games.iter().map(|g| g.name.as_str()).collect();
+        if names != *expected || cached.source != *expected_source {
+            misses.push(format!(
+                "nile={nile:?} heroic={}: got {names:?} from {}",
+                heroic.is_some(),
+                cached.source
+            ));
+        }
+    }
+    assert!(misses.is_empty(), "misses:\n{}", misses.join("\n"));
+}

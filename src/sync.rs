@@ -78,7 +78,11 @@ fn skip_and_remove_cache(cache_path: &Path, reason: String) -> SyncStatus {
 /// A source is reported as `Skipped` only when its library file does not exist
 /// and the loader returns no games; its existing cache is then removed. If the
 /// file exists but is empty, the cache is still written (with zero entries).
+///
+/// Amazon reads Nile's own library (beside `heroic_dir`) first and falls back
+/// to Heroic's `nile_library.json` only when Nile's file yields no games.
 pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
+    let nile_games = heroic::load_nile(&heroic::nile_library_path(heroic_dir));
     let sources: Vec<HeroicSource> = vec![
         ("epic", heroic::load_epic, "legendary_library.json"),
         ("gog", heroic::load_gog, "gog_library.json"),
@@ -88,9 +92,12 @@ pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
     sources
         .into_iter()
         .map(|(platform, loader, filename)| {
+            let cache_path = cache_dir.join(format!("{platform}.json"));
+            if platform == "amazon" && !nile_games.is_empty() {
+                return write_and_report(platform, &cache_path, &nile_games, "nile");
+            }
             let source_path = heroic_dir.join(filename);
             let games = loader(&source_path);
-            let cache_path = cache_dir.join(format!("{platform}.json"));
             if games.is_empty() && !source_path.exists() {
                 return SyncReport::without_games(
                     platform,
