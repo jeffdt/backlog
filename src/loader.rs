@@ -65,17 +65,22 @@ pub fn dedupe(games: Vec<Game>) -> Vec<LibraryEntry> {
 
     for game in games {
         let key = queue::normalize_key(&game.name);
-        if let Some(&idx) = key_to_index.get(&key) {
-            if !entries[idx].platforms.contains(&game.platform) {
-                entries[idx].platforms.push(game.platform);
-            }
-        } else {
-            let idx = entries.len();
-            key_to_index.insert(key, idx);
+        let idx = *key_to_index.entry(key).or_insert_with(|| {
             entries.push(LibraryEntry {
-                name: game.name,
-                platforms: vec![game.platform],
+                name: game.name.clone(),
+                ..Default::default()
             });
+            entries.len() - 1
+        });
+        let entry = &mut entries[idx];
+        if let Some(stamp) = game.first_seen {
+            entry
+                .first_seen
+                .entry(game.platform.clone())
+                .or_insert(stamp);
+        }
+        if !entry.platforms.contains(&game.platform) {
+            entry.platforms.push(game.platform);
         }
     }
 

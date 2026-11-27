@@ -34,6 +34,7 @@ pub fn load_gog(path: &Path) -> Vec<Game> {
             Some(Game {
                 name: name.to_string(),
                 platform: "gog".to_string(),
+                ..Default::default()
             })
         })
         .collect()
@@ -72,6 +73,7 @@ pub fn load_nile(path: &Path) -> Vec<Game> {
             Some(Game {
                 name: name.to_string(),
                 platform: "amazon".to_string(),
+                ..Default::default()
             })
         })
         .collect()
@@ -91,6 +93,7 @@ fn load_heroic_library(path: &Path, key: &str, platform: &str) -> Vec<Game> {
             Some(Game {
                 name: name.to_string(),
                 platform: platform.to_string(),
+                ..Default::default()
             })
         })
         .collect()

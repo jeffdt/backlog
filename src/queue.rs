@@ -9,7 +9,7 @@ use crate::LibraryEntry;
 pub const QUEUE_VERSION: u32 = 1;
 
 /// Per-game queue state, stored in the order that defines queue rank.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueEntry {
     /// Normalized match key, produced by `normalize_key`.
     pub key: String,
@@ -19,6 +19,16 @@ pub struct QueueEntry {
     pub queued: bool,
     /// Whether the game has been played. Independent of `queued`.
     pub played: bool,
+    /// RFC3339 time the game was last queued. Kept after unqueueing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_at: Option<String>,
+    /// RFC3339 time the game was last marked played. Kept after unmarking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub played_at: Option<String>,
+}
+
+fn now() -> Option<String> {
+    Some(chrono::Utc::now().to_rfc3339())
 }
 
 /// The full set of per-game queue state, persisted as one JSON file.
@@ -131,6 +141,12 @@ impl Queue {
             .unwrap_or_default()
     }
 
+    /// Returns the stored entry for `name`, if any.
+    pub fn entry(&self, name: &str) -> Option<&QueueEntry> {
+        let key = normalize_key(name);
+        self.entries.iter().find(|e| e.key == key)
+    }
+
     fn index_of(&self, key: &str) -> Option<usize> {
         self.entries.iter().position(|e| e.key == key)
     }
@@ -144,13 +160,15 @@ impl Queue {
             Some(idx) => {
                 let mut entry = self.entries.remove(idx);
                 entry.queued = true;
+                entry.queued_at = now();
                 self.entries.push(entry);
             }
             None => self.entries.push(QueueEntry {
                 key,
                 name: name.trim().to_string(),
                 queued: true,
-                played: false,
+                queued_at: now(),
+                ..Default::default()
             }),
         }
     }
@@ -169,12 +187,19 @@ impl Queue {
     pub fn toggle_played(&mut self, name: &str) {
         let key = normalize_key(name);
         match self.index_of(&key) {
-            Some(idx) => self.entries[idx].played = !self.entries[idx].played,
+            Some(idx) => {
+                let entry = &mut self.entries[idx];
+                entry.played = !entry.played;
+                if entry.played {
+                    entry.played_at = now();
+                }
+            }
             None => self.entries.push(QueueEntry {
                 key,
                 name: name.trim().to_string(),
-                queued: false,
                 played: true,
+                played_at: now(),
+                ..Default::default()
             }),
         }
     }

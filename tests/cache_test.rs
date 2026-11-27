@@ -16,10 +16,12 @@ fn test_write_and_read_cache() {
         Game {
             name: "Hollow Knight".to_string(),
             platform: "gog".to_string(),
+            ..Default::default()
         },
         Game {
             name: "Celeste".to_string(),
             platform: "epic".to_string(),
+            ..Default::default()
         },
     ];
     cache::write_cache(&path, &games, "test_source").unwrap();
@@ -37,6 +39,7 @@ fn test_write_cache_creates_parent_dirs() {
     let games = vec![Game {
         name: "Test".to_string(),
         platform: "steam".to_string(),
+        ..Default::default()
     }];
     cache::write_cache(&path, &games, "test").unwrap();
     assert!(path.exists());
@@ -60,6 +63,7 @@ fn test_cache_format_matches_python() {
     let games = vec![Game {
         name: "Half-Life".to_string(),
         platform: "steam".to_string(),
+        ..Default::default()
     }];
     cache::write_cache(&path, &games, "steam_api").unwrap();
     let raw: serde_json::Value =
@@ -68,4 +72,29 @@ fn test_cache_format_matches_python() {
     assert_eq!(raw["source"], "steam_api");
     assert_eq!(raw["games"][0]["name"], "Half-Life");
     assert_eq!(raw["games"][0]["platform"], "steam");
+}
+
+#[test]
+fn test_old_cache_without_first_seen_parses() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("old.json");
+    std::fs::write(
+        &path,
+        r#"{"last_updated": "2026-01-01T00:00:00+00:00", "source": "s", "games": [{"name": "A", "platform": "epic"}]}"#,
+    )
+    .unwrap();
+    assert_eq!(cache::read_cache(&path).unwrap().games[0].first_seen, None);
+
+    let out = dir.path().join("new.json");
+    let games = vec![Game {
+        name: "A".to_string(),
+        platform: "epic".to_string(),
+        first_seen: None,
+    }];
+    cache::write_cache(&out, &games, "s").unwrap();
+    assert!(
+        !std::fs::read_to_string(&out)
+            .unwrap()
+            .contains("first_seen")
+    );
 }
