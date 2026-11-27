@@ -9,6 +9,7 @@ fn entry(name: &str, queued: bool, played: bool) -> QueueEntry {
         name: name.to_string(),
         queued,
         played,
+        ..Default::default()
     }
 }
 
@@ -405,4 +406,99 @@ fn restore_queued_requeues_in_the_old_slot_and_ignores_unknown_games() {
 
     assert_eq!(q.queued_names(), vec!["Tunic", "Pentiment"]);
     assert_eq!(q.entries.len(), 2);
+}
+
+#[derive(Clone, Copy)]
+enum Act {
+    Q,
+    P,
+    Restore,
+    MoveDown,
+}
+
+#[test]
+fn queue_dates_follow_toggles() {
+    use Act::*;
+    // (actions, queued_at set, played_at set, queued_at equals first stamp)
+    const ROWS: &[(&[Act], bool, bool, bool)] = &[
+        (&[Q], true, false, true),
+        (&[P], false, true, true),
+        (&[Q, Q], true, false, true),
+        (&[Q, Q, Restore], true, false, true),
+        (&[Q, Q, Q], true, false, false),
+        (&[Q, MoveDown], true, false, true),
+        (&[Q, P], true, true, true),
+    ];
+    let mut misses = Vec::new();
+    for (i, (actions, want_q, want_p, want_same)) in ROWS.iter().enumerate() {
+        let mut queue = Queue::default();
+        queue.toggle_queued("Other");
+        let mut first = None;
+        for act in *actions {
+            match act {
+                Q => queue.toggle_queued("Game"),
+                P => queue.toggle_played("Game"),
+                Restore => queue.restore_queued("Game"),
+                MoveDown => {
+                    queue.move_down("Other");
+                    queue.move_down("Game");
+                }
+            }
+            if first.is_none() {
+                first = queue.entry("Game").and_then(|e| e.queued_at.clone());
+            }
+        }
+        let e = queue.entry("Game").unwrap();
+        let ok_parse = [&e.queued_at, &e.played_at]
+            .iter()
+            .filter_map(|d| d.as_ref())
+            .all(|d| chrono::DateTime::parse_from_rfc3339(d).is_ok());
+        let same_or_later = match (&e.queued_at, &first) {
+            (Some(now), Some(f)) => {
+                if *want_same {
+                    now == f
+                } else {
+                    now >= f
+                }
+            }
+            _ => !*want_q,
+        };
+        if e.queued_at.is_some() != *want_q
+            || e.played_at.is_some() != *want_p
+            || !ok_parse
+            || !same_or_later
+        {
+            misses.push(format!("row {i}: {e:?}"));
+        }
+    }
+    assert!(misses.is_empty(), "misses:\n{}", misses.join("\n"));
+}
+
+#[test]
+fn queue_file_without_dates_loads_and_round_trips() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("queue.json");
+    std::fs::write(
+        &path,
+        r#"{"version":1,"entries":[{"key":"tunic","name":"Tunic","queued":true,"played":false}]}"#,
+    )
+    .unwrap();
+    let mut loaded = queue::load(&path).unwrap();
+    assert_eq!(loaded.entries[0].queued_at, None);
+    assert_eq!(loaded.entries[0].played_at, None);
+    queue::save(&path, &loaded).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("queued_at") && !text.contains("played_at"));
+    loaded.entries[0].queued_at = Some("2026-01-01T00:00:00+00:00".to_string());
+    queue::save(&path, &loaded).unwrap();
+    let reloaded = queue::load(&path).unwrap();
+    assert_eq!(
+        reloaded.entry("TUNIC").unwrap().queued_at.as_deref(),
+        Some("2026-01-01T00:00:00+00:00")
+    );
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("played_at")
+    );
 }
