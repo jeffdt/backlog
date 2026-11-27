@@ -155,6 +155,16 @@ impl Queue {
         }
     }
 
+    /// Re-queues a game in the slot its entry already holds, instead of at the
+    /// back like `toggle_queued`. Unqueueing leaves the entry in place, so this
+    /// undoes an unqueue at the game's old rank. Does nothing if the game has
+    /// no entry.
+    pub fn restore_queued(&mut self, name: &str) {
+        if let Some(idx) = self.index_of(&normalize_key(name)) {
+            self.entries[idx].queued = true;
+        }
+    }
+
     /// Toggles the played flag, leaving queue membership and rank untouched.
     pub fn toggle_played(&mut self, name: &str) {
         let key = normalize_key(name);
@@ -298,23 +308,39 @@ pub const PLAYED_GLYPH: char = '✓';
 /// `Queued` returns games in rank order and skips queued games that are no
 /// longer in the library; every other filter preserves library order.
 pub fn apply_filter(library: &[LibraryEntry], queue: &Queue, filter: Filter) -> Vec<LibraryEntry> {
+    apply_filter_keeping(library, queue, filter, None)
+}
+
+/// Like `apply_filter`, but the game named `keep` stays in the result, in the
+/// slot it would hold if it still matched.
+///
+/// The TUI uses this so a game toggled out of the active filter does not
+/// vanish from under the cursor.
+pub fn apply_filter_keeping(
+    library: &[LibraryEntry],
+    queue: &Queue,
+    filter: Filter,
+    keep: Option<&str>,
+) -> Vec<LibraryEntry> {
+    let keep = keep.map(normalize_key);
+    let kept = |name: &str| keep.as_deref() == Some(normalize_key(name).as_str());
     match filter {
         Filter::All => library.to_vec(),
         Filter::Queued => queue
             .entries
             .iter()
-            .filter(|e| e.queued)
+            .filter(|e| e.queued || keep.as_deref() == Some(e.key.as_str()))
             .filter_map(|e| library.iter().find(|g| normalize_key(&g.name) == e.key))
             .cloned()
             .collect(),
         Filter::Played => library
             .iter()
-            .filter(|g| queue.state(&g.name).played)
+            .filter(|g| queue.state(&g.name).played || kept(&g.name))
             .cloned()
             .collect(),
         Filter::Unplayed => library
             .iter()
-            .filter(|g| !queue.state(&g.name).played)
+            .filter(|g| !queue.state(&g.name).played || kept(&g.name))
             .cloned()
             .collect(),
     }

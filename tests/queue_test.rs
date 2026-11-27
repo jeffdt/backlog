@@ -337,3 +337,72 @@ fn filter_unplayed_includes_queued_but_unplayed_games() {
     let out = queue::apply_filter(&lib, &q, Filter::Unplayed);
     assert_eq!(names(&out), vec!["Tunic", "Outer Wilds"]);
 }
+
+#[test]
+fn apply_filter_keeping_holds_the_kept_game_in_its_slot() {
+    // Library: Tunic, Outer Wilds, Pentiment. Queue: Pentiment then Tunic
+    // queued; Outer Wilds played but unqueued (rank slot between them).
+    const CASES: &[(Filter, Option<&str>, &[&str])] = &[
+        (Filter::Unplayed, None, &["Tunic", "Pentiment"]),
+        (
+            Filter::Unplayed,
+            Some("Outer Wilds"),
+            &["Tunic", "Outer Wilds", "Pentiment"],
+        ),
+        (
+            Filter::Unplayed,
+            Some("outer wilds"),
+            &["Tunic", "Outer Wilds", "Pentiment"],
+        ),
+        (Filter::Unplayed, Some("Tunic"), &["Tunic", "Pentiment"]),
+        (Filter::Played, None, &["Outer Wilds"]),
+        (Filter::Played, Some("Tunic"), &["Tunic", "Outer Wilds"]),
+        (Filter::Queued, None, &["Pentiment", "Tunic"]),
+        (
+            Filter::Queued,
+            Some("Outer Wilds"),
+            &["Pentiment", "Outer Wilds", "Tunic"],
+        ),
+        (
+            Filter::Queued,
+            Some("Not In Queue"),
+            &["Pentiment", "Tunic"],
+        ),
+        (
+            Filter::All,
+            Some("Tunic"),
+            &["Tunic", "Outer Wilds", "Pentiment"],
+        ),
+    ];
+    let lib = library(&["Tunic", "Outer Wilds", "Pentiment"]);
+    let mut q = Queue::default();
+    q.toggle_queued("Pentiment");
+    q.toggle_queued("Outer Wilds");
+    q.toggle_queued("Tunic");
+    q.toggle_queued("Outer Wilds");
+    q.toggle_played("Outer Wilds");
+
+    let misses: Vec<String> = CASES
+        .iter()
+        .filter_map(|(filter, keep, want)| {
+            let got = queue::apply_filter_keeping(&lib, &q, *filter, *keep);
+            (names(&got) != *want)
+                .then(|| format!("{filter:?} keep {keep:?}: got {:?}", names(&got)))
+        })
+        .collect();
+    assert!(misses.is_empty(), "{misses:#?}");
+}
+
+#[test]
+fn restore_queued_requeues_in_the_old_slot_and_ignores_unknown_games() {
+    let mut q = Queue::default();
+    q.toggle_queued("Tunic");
+    q.toggle_queued("Pentiment");
+    q.toggle_queued("Tunic");
+
+    q.restore_queued("Tunic");
+    q.restore_queued("Never Seen");
+
+    assert_eq!(q.queued_names(), vec!["Tunic", "Pentiment"]);
+    assert_eq!(q.entries.len(), 2);
+}

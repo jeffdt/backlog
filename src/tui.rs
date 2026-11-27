@@ -43,6 +43,15 @@ struct App {
     /// is never replaced by the empty queue standing in for it.
     queue_writable: bool,
     filter: crate::queue::Filter,
+    /// The game last toggled, kept visible under the active filter even after
+    /// it stops matching, until the cursor moves, the tab or search changes,
+    /// or a sync reloads the library. Without it a toggled row vanishes from
+    /// under the cursor.
+    pinned: Option<String>,
+    /// True when the pinned game was pinned by being unqueued, so queueing it
+    /// again before the pin is released undoes the unqueue in its old rank
+    /// rather than sending it to the back of the queue.
+    pinned_unqueued: bool,
     /// Queue load or write failure, shown in place of the hint until the next
     /// successful write.
     status_message: Option<String>,
@@ -77,13 +86,65 @@ impl App {
             queue_path,
             queue_writable,
             filter: crate::queue::Filter::default(),
+            pinned: None,
+            pinned_unqueued: false,
             status_message,
         }
     }
 
     /// The library narrowed to the active filter, in the order it renders.
     fn filtered(&self) -> Vec<LibraryEntry> {
-        crate::queue::apply_filter(&self.games, &self.queue, self.filter)
+        crate::queue::apply_filter_keeping(
+            &self.games,
+            &self.queue,
+            self.filter,
+            self.pinned.as_deref(),
+        )
+    }
+
+    /// The pinned game, if it no longer matches the active filter and is only
+    /// on screen because it is pinned. Only this row is styled as leaving: a
+    /// pinned game that still matches is not going anywhere.
+    fn leaving_game(&self) -> Option<String> {
+        let pinned = self.pinned.as_deref()?;
+        let matching = crate::queue::apply_filter(&self.games, &self.queue, self.filter);
+        (!matching.iter().any(|g| g.name == pinned)).then(|| pinned.to_string())
+    }
+
+    /// Clears the pinned row and moves the cursor to the top, for any change
+    /// that replaces the visible rows wholesale.
+    fn reset_rows(&mut self) {
+        self.pinned = None;
+        self.pinned_unqueued = false;
+        self.selected = 0;
+    }
+
+    /// Moves the cursor one row, releasing the pinned row.
+    ///
+    /// The cursor lands on the game it was heading for, looked up in the rows
+    /// left once the pin is gone, so a pinned row dropping out above the
+    /// cursor does not make it skip a game.
+    fn move_cursor(&mut self, down: bool) {
+        let target = self.selected_row().map(|(current, _)| {
+            let filtered = self.filtered();
+            let rows = search::fuzzy_search(&self.input, &filtered);
+            let next = if down {
+                (current + 1).min(rows.len() - 1)
+            } else {
+                current.saturating_sub(1)
+            };
+            (next, rows[next].game.name.clone())
+        });
+        self.pinned = None;
+        self.pinned_unqueued = false;
+        let Some((next, name)) = target else {
+            return;
+        };
+        let filtered = self.filtered();
+        self.selected = search::fuzzy_search(&self.input, &filtered)
+            .iter()
+            .position(|r| r.game.name == name)
+            .unwrap_or(next);
     }
 
     fn start_sync(&mut self) {
@@ -112,7 +173,7 @@ impl App {
         let load_result = loader::load_all_games(&self.cache_dir);
         self.games = load_result.games;
         self.sync_age = loader::format_sync_age(load_result.oldest_update);
-        self.selected = 0;
+        self.reset_rows();
         self.sync_state = SyncState::Done(reports);
         self.sync_rx = None;
     }
@@ -162,7 +223,14 @@ impl App {
         let Some(name) = self.selected_game() else {
             return;
         };
-        self.queue.toggle_queued(&name);
+        if self.pinned_unqueued && self.pinned.as_deref() == Some(name.as_str()) {
+            self.queue.restore_queued(&name);
+            self.pinned_unqueued = false;
+        } else {
+            self.pinned_unqueued = self.queue.state(&name).queued;
+            self.queue.toggle_queued(&name);
+        }
+        self.pinned = Some(name);
         self.persist_queue();
     }
 
@@ -171,6 +239,7 @@ impl App {
             return;
         };
         self.queue.toggle_played(&name);
+        self.pinned = Some(name);
         self.persist_queue();
     }
 
@@ -286,11 +355,11 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
                 }
                 (KeyCode::BackTab, _) => {
                     app.filter = app.filter.prev();
-                    app.selected = 0;
+                    app.reset_rows();
                 }
                 (KeyCode::Tab, _) => {
                     app.filter = app.filter.next();
-                    app.selected = 0;
+                    app.reset_rows();
                 }
                 (KeyCode::Enter, _) => {
                     app.toggle_queued();
@@ -313,7 +382,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
                 (KeyCode::Char(c), _) => {
                     app.input.insert(app.cursor_pos, c);
                     app.cursor_pos += c.len_utf8();
-                    app.selected = 0;
+                    app.reset_rows();
                 }
                 (KeyCode::Backspace, _) if app.cursor_pos > 0 => {
                     let prev = app.input[..app.cursor_pos]
@@ -323,7 +392,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
                         .unwrap_or(0);
                     app.input.drain(prev..app.cursor_pos);
                     app.cursor_pos = prev;
-                    app.selected = 0;
+                    app.reset_rows();
                 }
                 (KeyCode::Left, _) if app.cursor_pos > 0 => {
                     app.cursor_pos = app.input[..app.cursor_pos]
@@ -340,10 +409,10 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
                         .unwrap_or(app.input.len());
                 }
                 (KeyCode::Down, _) => {
-                    app.selected = app.selected.saturating_add(1);
+                    app.move_cursor(true);
                 }
                 (KeyCode::Up, _) => {
-                    app.selected = app.selected.saturating_sub(1);
+                    app.move_cursor(false);
                 }
                 _ => {}
             }
@@ -821,6 +890,7 @@ fn draw(f: &mut Frame, app: &App) {
         return;
     }
 
+    let leaving_game = app.leaving_game();
     let color = filter_color(app.filter);
     let (title, tail) = if app.input.is_empty() {
         (
@@ -860,9 +930,20 @@ fn draw(f: &mut Frame, app: &App) {
             rank,
             color,
         );
-        if i + scroll_offset == selected {
+        let selected_row = i + scroll_offset == selected;
+        let leaving = leaving_game.as_deref() == Some(result.game.name.as_str());
+        if selected_row || leaving {
+            // Dim replaces bold on a leaving row: many terminals cannot show both.
+            let emphasis = if leaving {
+                Modifier::DIM
+            } else {
+                Modifier::BOLD
+            };
             for span in spans.iter_mut().skip(1) {
-                span.style = span.style.bg(Color::DarkGray).add_modifier(Modifier::BOLD);
+                if selected_row {
+                    span.style = span.style.bg(Color::DarkGray);
+                }
+                span.style = span.style.add_modifier(emphasis);
             }
         }
         let row_area = Rect::new(body_area.x, body_area.y + i as u16, body_area.width, 1);
@@ -1058,6 +1139,150 @@ mod tests {
         // changed but the visible rows did not.
         assert_eq!(app.queue.rank("Tunic"), Some(2));
         assert_eq!(app.selected, 0, "cursor should stay on Tunic");
+    }
+
+    fn visible(app: &App) -> Vec<String> {
+        search::fuzzy_search(&app.input, &app.filtered())
+            .iter()
+            .map(|r| r.game.name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_game_toggled_out_of_the_filter_stays_until_the_cursor_moves() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        app.filter = crate::queue::Filter::Unplayed;
+        app.selected = 1;
+
+        app.toggle_played();
+        assert!(app.queue.state("B").played);
+        assert_eq!(
+            visible(&app),
+            ["A", "B", "C"],
+            "B should linger after toggling"
+        );
+
+        app.move_cursor(true);
+        assert_eq!(visible(&app), ["A", "C"]);
+        assert_eq!(
+            app.selected_game(),
+            Some("C".to_string()),
+            "cursor must not skip C"
+        );
+    }
+
+    #[test]
+    fn moving_up_off_a_pinned_row_lands_on_the_row_above() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        app.filter = crate::queue::Filter::Unplayed;
+        app.selected = 1;
+
+        app.toggle_played();
+        app.move_cursor(false);
+        assert_eq!(app.selected_game(), Some("A".to_string()));
+    }
+
+    #[test]
+    fn toggling_twice_without_moving_keeps_the_row_and_restores_state() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.filter = crate::queue::Filter::Unplayed;
+        app.selected = 0;
+
+        app.toggle_played();
+        app.toggle_played();
+        assert!(!app.queue.state("A").played);
+        assert_eq!(app.selected_game(), Some("A".to_string()));
+    }
+
+    #[test]
+    fn undoing_an_unqueue_before_moving_keeps_the_old_rank() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        queue_all(&mut app, &["A", "B", "C"]);
+        app.filter = crate::queue::Filter::Queued;
+        app.selected = 0;
+
+        app.toggle_queued();
+        assert_eq!(app.queue.rank("A"), None);
+        app.toggle_queued();
+        assert_eq!(app.queue.rank("A"), Some(1), "undo should restore rank 1");
+        app.toggle_queued();
+        app.toggle_queued();
+        assert_eq!(app.queue.rank("A"), Some(1), "repeated undo should too");
+    }
+
+    #[test]
+    fn requeueing_after_moving_away_goes_to_the_back() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        queue_all(&mut app, &["A", "B", "C"]);
+        app.input = "a".to_string();
+        app.toggle_queued();
+        app.reset_rows();
+        app.input = "a".to_string();
+
+        app.toggle_queued();
+        assert_eq!(app.queue.rank("A"), Some(3));
+    }
+
+    #[test]
+    fn queueing_a_game_just_marked_played_still_goes_to_the_back() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.input = "a".to_string();
+        app.toggle_played();
+        app.queue.toggle_queued("B");
+
+        app.toggle_queued();
+        assert_eq!(app.queue.rank("A"), Some(2));
+    }
+
+    #[test]
+    fn only_a_pinned_game_that_left_the_filter_counts_as_leaving() {
+        use crate::queue::Filter;
+        // (filter, action, leaving?) for game "A" in a library of A and B.
+        const CASES: &[(Filter, &str, bool)] = &[
+            (Filter::Unplayed, "played", true),
+            (Filter::Unplayed, "queued", false),
+            (Filter::All, "played", false),
+            (Filter::All, "queued", false),
+            (Filter::Played, "played", true),
+            (Filter::Queued, "queued", true),
+            (Filter::Queued, "played", false),
+        ];
+        let misses: Vec<String> = CASES
+            .iter()
+            .filter_map(|&(filter, action, want)| {
+                let dir = TempDir::new().unwrap();
+                let mut app = test_app(&dir, &["A", "B"]);
+                app.queue.toggle_queued("A");
+                if filter == Filter::Played {
+                    app.queue.toggle_played("A");
+                }
+                app.filter = filter;
+                app.input = "a".to_string();
+                match action {
+                    "played" => app.toggle_played(),
+                    _ => app.toggle_queued(),
+                }
+                let got = app.leaving_game().is_some();
+                (got != want).then(|| format!("{filter:?} after {action}: leaving={got}"))
+            })
+            .collect();
+        assert!(misses.is_empty(), "{misses:#?}");
+    }
+
+    #[test]
+    fn switching_tabs_or_typing_releases_the_pinned_row() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.filter = crate::queue::Filter::Unplayed;
+        app.toggle_played();
+        app.reset_rows();
+        assert_eq!(visible(&app), ["B"]);
     }
 
     fn line_text(l: &Line) -> String {
