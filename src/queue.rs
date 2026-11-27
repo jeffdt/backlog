@@ -266,7 +266,7 @@ impl Filter {
         }
     }
 
-    /// The word shown in the status-row chip.
+    /// The word shown on the filter's tab.
     pub fn label(self) -> &'static str {
         match self {
             Filter::All => "all",
@@ -276,7 +276,7 @@ impl Filter {
         }
     }
 
-    /// The row glyph this filter selects for, repeated in its chip so cycling
+    /// The row glyph this filter selects for, repeated on its tab so cycling
     /// teaches the marker vocabulary. `Unplayed` has none: there is no glyph
     /// for an absence.
     pub fn glyph(self) -> Option<char> {
