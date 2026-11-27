@@ -99,9 +99,12 @@ by design: prices go stale fast, so every run asks ITAD again.
 
 ### Search (`search.rs`)
 Uses `nucleo-matcher`. Multi-word queries split into atoms that must all
-match. Results sort by score descending, then a relative threshold
-(`best * 3/5`) prunes weak matches. `match_indices` are returned for TUI
-highlighting.
+match. Matching is tiered: if any title contains every atom as a literal
+substring, only those titles are returned; otherwise it falls back to fuzzy
+matching, where a relative threshold (`best * 3/5`) prunes weak matches.
+That keeps typos and abbreviations working without letting scattered
+subsequence matches crowd out real hits. Results sort by score descending,
+and `match_indices` are returned for TUI highlighting.
 
 ### Queue (`queue.rs`, `output.rs`)
 `queue.rs` tracks two independent per-game flags, `queued` and `played`
@@ -137,6 +140,16 @@ exists). Shows live fuzzy results as the user types, plus a human-readable
 - Tests are integration-style in `tests/`, one file per module, driving the
   public library API with `tempfile` for filesystem isolation. Add coverage
   there when changing library behavior.
+- **Table-driven tests are the default, and more cases are better.** When
+  behavior varies by input (search queries, parsing, formatting, filters),
+  write the cases as a `const` table of input and expected-outcome rows and
+  loop over it, collecting every miss into one assertion so a single run
+  reports all failures with the actual output (`tests/search_test.rs` is the
+  model). Pull rows from a real synced library rather than inventing them:
+  names with `™`, `®`, accents, and near-miss spellings are where bugs have
+  hidden. A new bug or edge case becomes a new row, ideally one that fails
+  before the fix. Before changing behavior, pin the current behavior with
+  rows that pass on the old code, so a regression shows up as a red row.
 
 ## Durable design decisions
 

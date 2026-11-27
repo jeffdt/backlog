@@ -1,5 +1,5 @@
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
+use nucleo_matcher::{Config, Matcher, Utf32Str, chars};
 
 use crate::LibraryEntry;
 
@@ -11,48 +11,75 @@ pub struct SearchResult<'a> {
     pub match_indices: Vec<u32>,
 }
 
-/// Fuzzy-searches `library` using nucleo-matcher, returning matches sorted by score descending.
+/// Searches `library` for `query`, returning matches sorted by score descending.
 ///
-/// Multi-word queries (e.g. "tomb raider") split into atoms that ALL must match.
-/// An empty query returns every entry with score 0.
+/// Multi-word queries (e.g. "tomb raider") split into words that ALL must match.
+/// When any title contains every word literally (ignoring case and accents), only those
+/// titles are returned, so scattered subsequence matches like `kerbal` against
+/// "Kizuna Encounter: Super Tag Battle" never crowd out real hits. Only when no
+/// title matches literally does it fall back to fuzzy matching, which keeps
+/// typos and abbreviations working; weak fuzzy matches below `best * 3/5` are
+/// pruned. A blank query returns every entry with score 0.
 pub fn fuzzy_search<'a>(query: &str, library: &'a [LibraryEntry]) -> Vec<SearchResult<'a>> {
-    if library.is_empty() {
-        return Vec::new();
-    }
-
     let pattern = Pattern::new(
         query,
         CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
     );
-
     let mut matcher = Matcher::new(Config::DEFAULT);
-    let mut buf = Vec::new();
-    let mut indices_buf: Vec<u32> = Vec::new();
 
-    let mut results: Vec<SearchResult<'a>> = library
-        .iter()
-        .filter_map(|entry| {
-            let haystack = Utf32Str::new(&entry.name, &mut buf);
-            let score = pattern.score(haystack, &mut matcher)?;
-            indices_buf.clear();
-            let haystack = Utf32Str::new(&entry.name, &mut buf);
-            pattern.indices(haystack, &mut matcher, &mut indices_buf);
-            Some(SearchResult {
-                game: entry,
-                score,
-                match_indices: indices_buf.clone(),
-            })
-        })
-        .collect();
+    // Checked by hand rather than with AtomKind::Substring: in nucleo-matcher
+    // 0.3.1 that atom misses a match ending on the last char of any non-ASCII
+    // name ("knight" vs "Batman™: Arkham Knight").
+    let words: Vec<String> = query.split_whitespace().map(fold).collect();
+    let literal = library.iter().filter(|entry| {
+        let name = fold(&entry.name);
+        words.iter().all(|word| name.contains(word.as_str()))
+    });
+    let literal = score_all(&pattern, literal, &mut matcher);
+    if !literal.is_empty() {
+        return literal;
+    }
 
-    results.sort_by_key(|r| std::cmp::Reverse(r.score));
-
+    let mut results = score_all(&pattern, library.iter(), &mut matcher);
     if let Some(best) = results.first() {
         let threshold = best.score * 3 / 5;
         results.retain(|r| r.score >= threshold);
     }
+    results
+}
 
+/// Lowercases `text` and strips diacritics the same way the matcher does, one
+/// char per grapheme, so a literal check agrees with what the matcher scores.
+fn fold(text: &str) -> String {
+    chars::graphemes(text)
+        .map(|c| chars::to_lower_case(chars::normalize(c)))
+        .collect()
+}
+
+/// Scores `entries` against `pattern`, sorted by score descending.
+fn score_all<'a>(
+    pattern: &Pattern,
+    entries: impl Iterator<Item = &'a LibraryEntry>,
+    matcher: &mut Matcher,
+) -> Vec<SearchResult<'a>> {
+    let mut buf = Vec::new();
+    let mut results: Vec<SearchResult<'a>> = entries
+        .filter_map(|entry| {
+            let mut match_indices = Vec::new();
+            let score = pattern.indices(
+                Utf32Str::new(&entry.name, &mut buf),
+                matcher,
+                &mut match_indices,
+            )?;
+            Some(SearchResult {
+                game: entry,
+                score,
+                match_indices,
+            })
+        })
+        .collect();
+    results.sort_by_key(|r| std::cmp::Reverse(r.score));
     results
 }
