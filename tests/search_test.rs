@@ -46,6 +46,24 @@ const TITLES: &[&str] = &[
     "Schnellfahrstrecke Köln-Aachen",
     "Train Sim World® 5: Schnellfahrstrecke Köln-Aachen",
     "Train Sim World® 7: Schnellfahrstrecke Köln-Aachen Remastered",
+    "Stardew Valley",
+    "Baldur's Gate: Enhanced Edition",
+    "Baldur's Gate 3",
+    "Cyberpunk 2077",
+    "Keylocker | Turn Based Cyberpunk Action",
+    "Star Wars: Knights of the Old Republic",
+    "Guacamelee! Super Turbo Championship Edition",
+    "Space Warlord Organ Trading Simulator",
+    "My Time at Portia",
+    "Ōkami HD",
+    "ŚWIAT Racer",
+    "Żółw Ninja",
+    "Łódź Story",
+    "Ørsted Islands",
+    "Đorđe Adventure",
+    "Æon Flux",
+    "Straße Racer",
+    "Œuvre Collection",
 ];
 
 fn library() -> Vec<LibraryEntry> {
@@ -164,6 +182,13 @@ const MUST_FIND: &[(&str, &[&str])] = &[
             "Train Sim World® 7: Schnellfahrstrecke Köln-Aachen Remastered",
         ],
     ),
+    // Typos: substitutions, transpositions and dropped letters.
+    ("witcehr", &["The Witcher 3: Wild Hunt — Remastered"]),
+    ("hadse", &["Hades"]),
+    (
+        "baldrus gate",
+        &["Baldur's Gate 3", "Baldur's Gate: Enhanced Edition"],
+    ),
 ];
 
 /// (query, titles that must NOT appear in the results)
@@ -185,6 +210,38 @@ const MUST_NOT_FIND: &[(&str, &[&str])] = &[
     ("portal", &["Company of Heroes: Tales of Valor"]),
     ("witcher", &["Nine Witches: Family Disruption"]),
     ("witcher 3", &["The Witcher: Enhanced Edition"]),
+    // Typo tolerance must not drag in loosely related titles.
+    (
+        "kerbel",
+        &[
+            "Kizuna Encounter: Super Tag Battle",
+            "Star Wars: Knights of the Old Republic",
+        ],
+    ),
+    ("stardwe", &["Star Wars: Knights of the Old Republic"]),
+    ("celeset", &["Mystery Case Files: Moths to a Flame"]),
+    (
+        "portla",
+        &[
+            "Space Warlord Organ Trading Simulator",
+            "Company of Heroes: Tales of Valor",
+        ],
+    ),
+    (
+        "hadse",
+        &["The Witcher: Enhanced Edition", "Baldur's Gate 3"],
+    ),
+    (
+        "ded cels",
+        &["Train Sim World® 7: Schnellfahrstrecke Köln-Aachen Remastered"],
+    ),
+    (
+        "gta",
+        &[
+            "Guacamelee! Super Turbo Championship Edition",
+            "Baldur's Gate: Enhanced Edition",
+        ],
+    ),
 ];
 
 /// (query, title that must rank first)
@@ -197,7 +254,91 @@ const RANKS_FIRST: &[(&str, &str)] = &[
     ("hollow silk", "Hollow Knight: Silksong"),
     ("witcher 3", "The Witcher 3: Wild Hunt — Remastered"),
     ("hollw knight", "Hollow Knight"),
+    ("doom", "DOOM"),
+    ("kerbel", "Kerbal Space Program"),
+    ("hollow kinght", "Hollow Knight"),
+    ("stardwe", "Stardew Valley"),
+    ("celeset", "Celeste"),
+    ("portla", "Portal"),
+    ("cyberpnuk", "Cyberpunk 2077"),
+    ("okami", "Ōkami HD"),
 ];
+
+/// (query, the exact result set) for letters that only match once folded to
+/// plain ASCII. Queries are three letters, which get no typo budget, so a
+/// pass means the fold produced a literal match rather than a lucky typo.
+const FOLDS_TO_EXACTLY: &[(&str, &[&str])] = &[
+    ("oka", &["Ōkami HD"]),
+    ("swi", &["ŚWIAT Racer"]),
+    ("zol", &["Żółw Ninja"]),
+    ("lod", &["Łódź Story"]),
+    ("ors", &["Ørsted Islands"]),
+    ("dor", &["Đorđe Adventure"]),
+    ("aeo", &["Æon Flux"]),
+    ("sse", &["Straße Racer"]),
+    ("oeu", &["Œuvre Collection"]),
+    ("brü", &["Brütal Legend"]),
+];
+
+#[test]
+fn folds_accented_and_special_letters() {
+    let library = library();
+    let mut failures = Vec::new();
+    for (query, expected) in FOLDS_TO_EXACTLY {
+        let names = result_names(query, &library);
+        if names != *expected {
+            failures.push(format!(
+                "{query:?} should return exactly {expected:?}, got {names:?}"
+            ));
+        }
+    }
+    assert_no_failures(failures);
+}
+
+#[test]
+fn query_of_only_combining_marks_acts_like_blank() {
+    let library = library();
+    let results = search::fuzzy_search("\u{301}", &library);
+    assert_eq!(results.len(), library.len());
+    assert!(results.iter().all(|r| r.score == 0));
+}
+
+/// (query, title, exact char positions that must be highlighted)
+const HIGHLIGHTS: &[(&str, &str, &[u32])] = &[
+    ("celeste", "Celeste", &[0, 1, 2, 3, 4, 5, 6]),
+    ("brutal", "Brütal Legend", &[0, 1, 2, 3, 4, 5]),
+    ("legend", "Brütal Legend", &[7, 8, 9, 10, 11, 12]),
+    (
+        "knight",
+        "Batman™: Arkham Knight",
+        &[16, 17, 18, 19, 20, 21],
+    ),
+    ("okami", "Ōkami HD", &[0, 1, 2, 3, 4]),
+    ("strasse", "Straße Racer", &[0, 1, 2, 3, 4, 5]),
+    (
+        "tomb raider",
+        "Tomb Raider",
+        &[0, 1, 2, 3, 5, 6, 7, 8, 9, 10],
+    ),
+];
+
+#[test]
+fn highlights_exact_characters() {
+    let library = library();
+    let mut failures = Vec::new();
+    for (query, title, expected) in HIGHLIGHTS {
+        let results = search::fuzzy_search(query, &library);
+        match results.iter().find(|r| r.game.name == *title) {
+            Some(r) if r.match_indices == *expected => {}
+            Some(r) => failures.push(format!(
+                "{query:?} on {title:?} should highlight {expected:?}, got {:?}",
+                r.match_indices
+            )),
+            None => failures.push(format!("{query:?} should find {title:?}")),
+        }
+    }
+    assert_no_failures(failures);
+}
 
 #[test]
 fn finds_expected_titles() {
