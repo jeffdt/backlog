@@ -1,5 +1,6 @@
-use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str, chars};
+use frizbee::{CaseMatching, Config, Matcher, Pattern, PatternConfig, UnicodeMatching};
+use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
 
 use crate::LibraryEntry;
 
@@ -11,73 +12,140 @@ pub struct SearchResult<'a> {
     pub match_indices: Vec<u32>,
 }
 
+/// A name lowercased with diacritics stripped.
+struct Folded {
+    text: String,
+    /// For each byte of `text`, the index of the original char it came from, since
+    /// frizbee reports match positions as byte offsets into the text it was given.
+    origin: Vec<u32>,
+}
+
 /// Searches `library` for `query`, returning matches sorted by score descending.
 ///
 /// Multi-word queries (e.g. "tomb raider") split into words that ALL must match.
-/// When any title contains every word literally (ignoring case and accents), only those
-/// titles are returned, so scattered subsequence matches like `kerbal` against
-/// "Kizuna Encounter: Super Tag Battle" never crowd out real hits. Only when no
-/// title matches literally does it fall back to fuzzy matching, which keeps
-/// typos and abbreviations working; weak fuzzy matches below `best * 3/5` are
-/// pruned. A blank query returns every entry with score 0.
+/// When any title contains every word literally (ignoring case and accents), only
+/// those titles are returned, so scattered subsequence matches like `kerbal`
+/// against "Kizuna Encounter: Super Tag Battle" never crowd out literal hits.
+/// Only when no title matches literally does it fall back to fuzzy matching,
+/// which tolerates one typo per four letters of each word and keeps
+/// abbreviations working; weak fuzzy matches below `best * 4/5` are pruned.
+/// A blank query returns every entry with score 0.
 pub fn fuzzy_search<'a>(query: &str, library: &'a [LibraryEntry]) -> Vec<SearchResult<'a>> {
-    let pattern = Pattern::new(
-        query,
-        CaseMatching::Ignore,
-        Normalization::Smart,
-        AtomKind::Fuzzy,
-    );
-    let mut matcher = Matcher::new(Config::DEFAULT);
+    let words: Vec<String> = query
+        .split_whitespace()
+        .map(|w| fold(w).text)
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.is_empty() {
+        return library
+            .iter()
+            .map(|game| SearchResult {
+                game,
+                score: 0,
+                match_indices: Vec::new(),
+            })
+            .collect();
+    }
 
-    // Checked by hand rather than with AtomKind::Substring: in nucleo-matcher
-    // 0.3.1 that atom misses a match ending on the last char of any non-ASCII
-    // name ("knight" vs "Batman™: Arkham Knight").
-    let words: Vec<String> = query.split_whitespace().map(fold).collect();
-    let literal = library.iter().filter(|entry| {
-        let name = fold(&entry.name);
-        words.iter().all(|word| name.contains(word.as_str()))
-    });
-    let literal = score_all(&pattern, literal, &mut matcher);
+    let names: Vec<Folded> = library.iter().map(|e| fold(&e.name)).collect();
+    let literal: Vec<usize> = (0..library.len())
+        .filter(|&i| words.iter().all(|w| names[i].text.contains(w.as_str())))
+        .collect();
+    let literal = score_all(&words, &literal, &names, library, false);
     if !literal.is_empty() {
         return literal;
     }
 
-    let mut results = score_all(&pattern, library.iter(), &mut matcher);
+    let everything: Vec<usize> = (0..library.len()).collect();
+    let mut results = score_all(&words, &everything, &names, library, true);
     if let Some(best) = results.first() {
-        let threshold = best.score * 3 / 5;
+        let threshold = best.score * 4 / 5;
         results.retain(|r| r.score >= threshold);
     }
     results
 }
 
-/// Lowercases `text` and strips diacritics the same way the matcher does, one
-/// char per grapheme, so a literal check agrees with what the matcher scores.
-fn fold(text: &str) -> String {
-    chars::graphemes(text)
-        .map(|c| chars::to_lower_case(chars::normalize(c)))
-        .collect()
+/// Lowercases `text` and strips diacritics, recording where each kept byte came from.
+fn fold(text: &str) -> Folded {
+    let mut folded = Folded {
+        text: String::new(),
+        origin: Vec::new(),
+    };
+    for (i, c) in text.chars().enumerate() {
+        for lower in c.to_lowercase() {
+            for base in lower.nfd().filter(|d| !is_combining_mark(*d)) {
+                let start = folded.text.len();
+                match ascii_spelling(base) {
+                    Some(spelling) => folded.text.push_str(spelling),
+                    None => folded.text.push(base),
+                }
+                let added = folded.text.len() - start;
+                folded.origin.extend(std::iter::repeat_n(i as u32, added));
+            }
+        }
+    }
+    folded
 }
 
-/// Scores `entries` against `pattern`, sorted by score descending.
+/// ASCII spelling for lowercase letters that have no Unicode decomposition to strip.
+fn ascii_spelling(c: char) -> Option<&'static str> {
+    Some(match c {
+        'ł' => "l",
+        'ø' => "o",
+        'đ' => "d",
+        'ı' => "i",
+        'ħ' => "h",
+        'ß' => "ss",
+        'æ' => "ae",
+        'œ' => "oe",
+        'þ' => "th",
+        _ => return None,
+    })
+}
+
+/// Fuzzy-scores the entries at `candidates` against `words`, sorted by score descending.
 fn score_all<'a>(
-    pattern: &Pattern,
-    entries: impl Iterator<Item = &'a LibraryEntry>,
-    matcher: &mut Matcher,
+    words: &[String],
+    candidates: &[usize],
+    names: &[Folded],
+    library: &'a [LibraryEntry],
+    allow_typos: bool,
 ) -> Vec<SearchResult<'a>> {
-    let mut buf = Vec::new();
-    let mut results: Vec<SearchResult<'a>> = entries
-        .filter_map(|entry| {
-            let mut match_indices = Vec::new();
-            let score = pattern.indices(
-                Utf32Str::new(&entry.name, &mut buf),
-                matcher,
-                &mut match_indices,
-            )?;
-            Some(SearchResult {
-                game: entry,
-                score,
+    let patterns: Vec<Pattern> = words
+        .iter()
+        .map(|w| {
+            let typos = if allow_typos {
+                (w.chars().count() / 4) as u16
+            } else {
+                0
+            };
+            Pattern::new(w, PatternConfig::default()).max_typos(Some(typos))
+        })
+        .collect();
+    let config = Config {
+        casing: CaseMatching::Ignore,
+        unicode: UnicodeMatching::Always,
+        ..Config::default()
+    };
+    let haystacks: Vec<&str> = candidates.iter().map(|&i| names[i].text.as_str()).collect();
+    let mut results: Vec<SearchResult<'a>> = Matcher::from_patterns(&patterns, &config)
+        .match_list_indices(&haystacks)
+        .into_iter()
+        .map(|m| {
+            let entry = candidates[m.index as usize];
+            let name = &names[entry];
+            let mut match_indices: Vec<u32> = m
+                .indices
+                .iter()
+                .filter_map(|&byte| name.origin.get(byte as usize).copied())
+                .collect();
+            match_indices.sort_unstable();
+            match_indices.dedup();
+            SearchResult {
+                game: &library[entry],
+                score: u32::from(m.score),
                 match_indices,
-            })
+            }
         })
         .collect();
     results.sort_by_key(|r| std::cmp::Reverse(r.score));

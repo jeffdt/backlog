@@ -98,13 +98,19 @@ by design: prices go stale fast, so every run asks ITAD again.
   this fallback is what makes them testable with `tempfile`.
 
 ### Search (`search.rs`)
-Uses `nucleo-matcher`. Multi-word queries split into atoms that must all
-match. Matching is tiered: if any title contains every atom as a literal
-substring, only those titles are returned; otherwise it falls back to fuzzy
-matching, where a relative threshold (`best * 3/5`) prunes weak matches.
-That keeps typos and abbreviations working without letting scattered
-subsequence matches crowd out real hits. Results sort by score descending,
-and `match_indices` are returned for TUI highlighting.
+Uses `frizbee` for scoring. Names and queries are folded first (lowercased,
+diacritics stripped via `unicode-normalization`) so `okami` finds
+"Ōkami HD"; the fold keeps a byte-to-original-char map because frizbee
+reports match positions as byte offsets, while `match_indices` (used for
+TUI highlighting) are char positions in the original name. Multi-word
+queries split into words that must all match. Matching is tiered: if any
+folded title contains every word as a literal substring, only those titles
+are returned; otherwise it falls back to fuzzy matching with one typo
+allowed per four letters of each word, where a relative threshold
+(`best * 4/5`) prunes weak matches. That keeps typos and abbreviations
+working without letting scattered subsequence matches crowd out real hits.
+The tier rule, typo budget and threshold are tuned against the tables in
+`tests/search_test.rs`; change them only with rows that justify it.
 
 ### Queue (`queue.rs`, `output.rs`)
 `queue.rs` tracks two independent per-game flags, `queued` and `played`
