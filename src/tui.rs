@@ -184,17 +184,25 @@ impl App {
     /// game to the game's new row, or closes when the game is gone.
     fn reload_library(&mut self, load_result: LoadResult) {
         let open_game = self.details_cursor.and(self.selected_game());
+        let was_unqueued = self.pinned_unqueued;
         self.games = load_result.games;
         self.sync_age = loader::format_sync_age(load_result.oldest_update);
         self.reset_rows();
         let Some(name) = open_game else {
             return;
         };
-        if !self.games.iter().any(|g| g.name == name) {
+        let key = crate::queue::normalize_key(&name);
+        let Some(name) = self
+            .games
+            .iter()
+            .map(|g| g.name.clone())
+            .find(|n| crate::queue::normalize_key(n) == key)
+        else {
             self.details_cursor = None;
             return;
-        }
+        };
         self.pinned = Some(name.clone());
+        self.pinned_unqueued = was_unqueued;
         let row = search::fuzzy_search(&self.input, &self.filtered())
             .iter()
             .position(|r| r.game.name == name);
@@ -415,7 +423,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 /// Handles a key while the result list and search box have focus.
 fn handle_list_key(app: &mut App, key: KeyEvent) {
     match (key.code, key.modifiers) {
-        (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+        (KeyCode::Esc, _) => {
             app.quit = true;
         }
         (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
@@ -1065,8 +1073,13 @@ fn draw_details(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(format!(" {label}")),
         ];
         if let Some(date) = date {
-            text_len += 2 + date.chars().count();
-            spans.push(Span::styled(format!("  {date}"), dim));
+            text_len += 3 + date.chars().count();
+            let date_style = if app.details_cursor == Some(index) {
+                Style::default().fg(Color::Gray)
+            } else {
+                dim
+            };
+            spans.push(Span::styled(format!("   {date}"), date_style));
         }
         spans.push(Span::raw(
             " ".repeat(inner_width.saturating_sub(text_len + 4)),
@@ -2031,6 +2044,32 @@ mod tests {
     }
 
     #[test]
+    fn details_follows_its_game_across_a_casing_change() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["hollow knight"]);
+        app.filter = Filter::Unplayed;
+        app.open_details();
+        app.reload_library(library(&["Hollow Knight"]));
+        assert_eq!(app.details_cursor, Some(0));
+        assert_eq!(app.selected_game(), Some("Hollow Knight".to_string()));
+    }
+
+    #[test]
+    fn details_reload_keeps_the_quick_undo_of_an_unqueue() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.queue.toggle_queued("A");
+        app.filter = Filter::Queued;
+        app.open_details();
+        app.handle_details_key(key(KeyCode::Char('q')));
+        assert!(app.pinned_unqueued);
+        app.reload_library(library(&["A", "B"]));
+        assert!(app.pinned_unqueued);
+        app.handle_details_key(key(KeyCode::Char('q')));
+        assert!(app.queue.state("A").queued);
+    }
+
+    #[test]
     fn details_played_toggle_keeps_row_under_unplayed() {
         let dir = TempDir::new().unwrap();
         let mut app = test_app(&dir, &["A", "B"]);
@@ -2097,6 +2136,12 @@ mod tests {
         let mut on = popup_app(&dir, "Hollow Knight");
         on.queue.toggle_queued("Hollow Knight");
         let plain = popup_app(&dir, "Hollow Knight");
+        let mut both = popup_app(&dir, "Hollow Knight");
+        both.queue.toggle_queued("Hollow Knight");
+        both.queue.toggle_played("Hollow Knight");
+        both.queue.entries[0].queued_at = Some("2026-11-27T15:00:00+00:00".to_string());
+        both.queue.entries[0].played_at = Some("2026-12-02T15:00:00+00:00".to_string());
+        both.filter = Filter::Queued;
 
         let always = [
             "‹ Hollow Knight ›",
@@ -2117,7 +2162,13 @@ mod tests {
             (
                 "queued",
                 &on,
-                vec!["[x] » queued", "2026", "#1 of 1", "rank"],
+                vec!["[x] » queued", "#1 of 1", "rank"],
+                vec![],
+            ),
+            (
+                "queued and played dates",
+                &both,
+                vec!["[x] » queued   Nov 27, 2026", "[x] ✓ played   Dec 2, 2026"],
                 vec![],
             ),
             (
@@ -2140,6 +2191,25 @@ mod tests {
                     misses.push(format!("{label}: unexpected {a:?}"));
                 }
             }
+        }
+        let buf = render_buffer(&both, 100, 30);
+        let text = popup_text(&both, 100, 30);
+        let line = text
+            .lines()
+            .position(|l| l.contains("[x] » queued"))
+            .unwrap() as u16;
+        let x = text
+            .lines()
+            .nth(line as usize)
+            .unwrap()
+            .find("Nov")
+            .unwrap();
+        let col = text.lines().nth(line as usize).unwrap()[..x]
+            .chars()
+            .count() as u16;
+        let cell = &buf[(col, line)];
+        if cell.fg == cell.bg || cell.bg != Color::DarkGray {
+            misses.push(format!("cursor-row date fg {:?} bg {:?}", cell.fg, cell.bg));
         }
         let text = popup_text(&plain, 100, 30);
         let gog = text.lines().find(|l| l.contains("gog")).unwrap();

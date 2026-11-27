@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::Game;
 use crate::cache;
 use crate::config;
+use crate::queue;
 use crate::sources::heroic;
 use crate::sources::steam;
 
@@ -45,19 +46,28 @@ impl SyncReport {
 /// removed relative to the cache it replaces. A failed write keeps the old
 /// cache and reports no changes.
 fn write_and_report(platform: &str, cache_path: &Path, games: &[Game], source: &str) -> SyncReport {
-    let old: Option<HashMap<String, Option<String>>> = cache::read_cache(cache_path).map(|c| {
-        c.games
-            .into_iter()
-            .map(|g| (g.name, g.first_seen))
-            .collect()
-    });
-    let old_names: BTreeSet<String> = old.iter().flat_map(|m| m.keys().cloned()).collect();
+    let old_cache = cache::read_cache(cache_path);
+    let old_names: BTreeSet<String> = old_cache
+        .iter()
+        .flat_map(|c| c.games.iter().map(|g| g.name.clone()))
+        .collect();
+    // An empty old cache says nothing about when titles were first seen.
+    let old: Option<HashMap<String, Option<String>>> =
+        old_cache.filter(|c| !c.games.is_empty()).map(|c| {
+            c.games
+                .into_iter()
+                .map(|g| (queue::normalize_key(&g.name), g.first_seen))
+                .collect()
+        });
     let now = Utc::now().to_rfc3339();
     let stamped: Vec<Game> = games
         .iter()
         .map(|g| Game {
             first_seen: match &old {
-                Some(m) => m.get(&g.name).cloned().unwrap_or_else(|| Some(now.clone())),
+                Some(m) => m
+                    .get(&queue::normalize_key(&g.name))
+                    .cloned()
+                    .unwrap_or_else(|| Some(now.clone())),
                 None => None,
             },
             ..g.clone()

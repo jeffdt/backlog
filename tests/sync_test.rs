@@ -328,6 +328,12 @@ fn test_sync_stamps_first_seen() {
             &["A"],
             &[("A", Want::Carried(DATE))],
         ),
+        (Some(&[]), &["A"], &[("A", Want::None)]),
+        (
+            Some(&[("hollow knight", Some(DATE))]),
+            &["Hollow Knight"],
+            &[("Hollow Knight", Want::Carried(DATE))],
+        ),
         (
             Some(&[("A", Some(DATE)), ("B", None)]),
             &["B", "C"],
