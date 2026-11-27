@@ -190,6 +190,11 @@ impl App {
         let Some(name) = open_game else {
             return;
         };
+        if !self.games.iter().any(|g| g.name == name) {
+            self.details_cursor = None;
+            return;
+        }
+        self.pinned = Some(name.clone());
         let row = search::fuzzy_search(&self.input, &self.filtered())
             .iter()
             .position(|r| r.game.name == name);
@@ -1858,6 +1863,18 @@ mod tests {
         app.reload_library(library(&["A", "B", "C"]));
         assert_eq!(app.details_cursor, Some(0));
         assert_eq!(app.selected_game(), Some("B".to_string()));
+    }
+
+    #[test]
+    fn details_stays_open_after_reload_when_filter_hides_its_game() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        app.filter = Filter::Unplayed;
+        app.open_details();
+        app.handle_details_key(key(KeyCode::Char('p')));
+        app.reload_library(library(&["A", "B"]));
+        assert_eq!(app.details_cursor, Some(0));
+        assert_eq!(app.selected_game(), Some("A".to_string()));
     }
 
     #[test]
