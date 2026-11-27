@@ -103,3 +103,42 @@ fn test_load_gog_handles_extra_fields_gracefully() {
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].name, "Fruitbus");
 }
+
+#[test]
+fn test_load_nile_extracts_product_titles() {
+    // (library.json contents, expected titles)
+    const CASES: &[(&str, &[&str])] = &[
+        (
+            r#"[
+                {"id": "a", "state": "LIVE", "product": {"title": "Castle on the Coast"}},
+                {"id": "b", "state": "LIVE", "product": {"title": "Ōkami HD"}}
+            ]"#,
+            &["Castle on the Coast", "Ōkami HD"],
+        ),
+        (r#"[{"id": "a", "product": {}}, {"id": "b"}]"#, &[]),
+        ("[]", &[]),
+        (r#"{"library": [{"title": "Heroic shape"}]}"#, &[]),
+        ("not json", &[]),
+    ];
+
+    let mut misses = Vec::new();
+    for (contents, expected) in CASES {
+        let dir = TempDir::new().unwrap();
+        let path = write_json(&dir, "library.json", contents);
+        let games = heroic::load_nile(&path);
+        let names: Vec<&str> = games.iter().map(|g| g.name.as_str()).collect();
+        if names != *expected || games.iter().any(|g| g.platform != "amazon") {
+            misses.push(format!("{contents}: got {names:?}"));
+        }
+    }
+    assert!(misses.is_empty(), "misses:\n{}", misses.join("\n"));
+}
+
+#[test]
+fn test_nile_library_path_is_beside_store_cache() {
+    let path = heroic::nile_library_path(std::path::Path::new("/h/heroic/store_cache"));
+    assert_eq!(
+        path,
+        std::path::PathBuf::from("/h/heroic/nile_config/nile/library.json")
+    );
+}

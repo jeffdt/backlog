@@ -44,6 +44,39 @@ pub fn load_amazon(path: &Path) -> Vec<Game> {
     load_heroic_library(path, "library", "amazon")
 }
 
+/// Returns the path to Nile's own `library.json`, which sits beside Heroic's
+/// `store_cache` directory and stays current even when Heroic's Amazon login
+/// is broken and its cache is empty.
+pub fn nile_library_path(store_cache_dir: &Path) -> PathBuf {
+    store_cache_dir
+        .parent()
+        .unwrap_or(store_cache_dir)
+        .join("nile_config")
+        .join("nile")
+        .join("library.json")
+}
+
+/// Loads Amazon Games titles from Nile's `library.json`, a top-level array of
+/// entitlements whose titles live at `product.title`.
+pub fn load_nile(path: &Path) -> Vec<Game> {
+    let Some(data) = read_json(path) else {
+        return Vec::new();
+    };
+    let Some(entries) = data.as_array() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|e| {
+            let name = e.get("product")?.get("title")?.as_str()?;
+            Some(Game {
+                name: name.to_string(),
+                platform: "amazon".to_string(),
+            })
+        })
+        .collect()
+}
+
 fn load_heroic_library(path: &Path, key: &str, platform: &str) -> Vec<Game> {
     let Some(data) = read_json(path) else {
         return Vec::new();

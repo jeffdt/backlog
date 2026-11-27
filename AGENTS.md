@@ -73,6 +73,11 @@ Each source converts an external format into `Vec<Game>`. Two kinds:
 - **`heroic.rs`** — reads the local Heroic launcher's `store_cache/*.json`
   files (`legendary_library.json` = Epic, `gog_library.json` = GOG with
   `gog-redist` filtered out, `nile_library.json` = Amazon). No network.
+  Amazon first reads Nile's own `nile_config/nile/library.json` (beside
+  `store_cache`) and falls back to `nile_library.json` only when Nile's
+  file yields no games: Heroic's copy goes empty whenever its Amazon login
+  breaks, while Nile's stays current. The cache `source` records which was
+  used (`nile` or `heroic_cache`).
 
 ### Prices (`itad.rs`)
 Thin IsThereAnyDeal client, called only by `bouncer price`. It keeps no cache
