@@ -1,0 +1,54 @@
+{
+  "prices": [
+    {
+      "id": "018d937f-6ee2-70f6-940c-6212ac74369e",
+      "current": {
+        "shop": {
+          "id": 20,
+          "name": "GameBillet"
+        },
+        "price": {
+          "amount": 6.14,
+          "currency": "USD"
+        },
+        "cut": 80
+      },
+      "lowest": {
+        "shop": {
+          "id": 68,
+          "name": "Gamer Thor"
+        },
+        "price": {
+          "amount": 1.99,
+          "currency": "USD"
+        },
+        "timestamp": "2025-01-04T19:07:28+01:00"
+      }
+    },
+    {
+      "id": "018d937f-6ee3-738a-b578-ddd7e9a0d24d",
+      "current": {
+        "shop": {
+          "id": 61,
+          "name": "Steam"
+        },
+        "price": {
+          "amount": 20.99,
+          "currency": "USD"
+        },
+        "cut": 30
+      },
+      "lowest": {
+        "shop": {
+          "id": 61,
+          "name": "Steam"
+        },
+        "price": {
+          "amount": 20.99,
+          "currency": "USD"
+        },
+        "timestamp": "2026-06-25T19:56:59+02:00"
+      }
+    }
+  ]
+}

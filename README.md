@@ -24,10 +24,15 @@ URL or vanity name (e.g. `https://steamcommunity.com/id/yourname` or just
 `yourname`). It resolves the vanity name to a Steam ID automatically and stores
 credentials in `~/.config/bouncer/config.json`.
 
+It also asks for an optional
+[IsThereAnyDeal API key](https://isthereanydeal.com/apps/my/), which `bouncer price`
+needs. Press Enter to skip it and rerun `setup` later to add it.
+
 ## Usage
 
 ```sh
-# One-shot search
+# One-shot search (`bouncer search "..."` is the explicit form, for titles
+# that collide with a command name like "queue")
 bouncer "hollow knight"
 
 # Sync library caches from all sources
@@ -35,6 +40,9 @@ bouncer sync
 
 # Print your ranked queue
 bouncer queue
+
+# Current and all-time-low prices (titles, Steam store URLs, Steam app IDs, or IsThereAnyDeal game IDs)
+bouncer price "hollow knight" "https://store.steampowered.com/app/367520"
 
 # Interactive TUI
 bouncer

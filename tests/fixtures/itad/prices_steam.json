@@ -1,0 +1,42 @@
+[
+  {
+    "id": "018d937f-6ee2-70f6-940c-6212ac74369e",
+    "deals": [
+      {
+        "shop": {
+          "id": 61,
+          "name": "Steam"
+        },
+        "price": {
+          "amount": 7.49,
+          "currency": "USD"
+        },
+        "regular": {
+          "amount": 29.99,
+          "currency": "USD"
+        },
+        "cut": 75
+      }
+    ]
+  },
+  {
+    "id": "018d937f-6ee3-738a-b578-ddd7e9a0d24d",
+    "deals": [
+      {
+        "shop": {
+          "id": 61,
+          "name": "Steam"
+        },
+        "price": {
+          "amount": 20.99,
+          "currency": "USD"
+        },
+        "regular": {
+          "amount": 29.99,
+          "currency": "USD"
+        },
+        "cut": 30
+      }
+    ]
+  }
+]

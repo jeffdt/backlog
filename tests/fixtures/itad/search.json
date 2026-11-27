@@ -1,0 +1,37 @@
+[
+  {
+    "id": "018d937f-6ee3-738a-b578-ddd7e9a0d24d",
+    "slug": "hades-ii",
+    "title": "Hades II",
+    "type": "game",
+    "mature": false
+  },
+  {
+    "id": "018d937f-2623-722e-8510-784e3dcf2b71",
+    "slug": "jades-journey-2",
+    "title": "Jade's Journey 2",
+    "type": "game",
+    "mature": false
+  },
+  {
+    "id": "018d9795-1610-737a-94a0-028f4bd31607",
+    "slug": "furry-shades-of-gay-2-a-shade-gayer",
+    "title": "Furry Shades of Gay 2: A Shade Gayer",
+    "type": "game",
+    "mature": true
+  },
+  {
+    "id": "019a4af2-e2ff-7383-b575-5957dea3a26b",
+    "slug": "hades-and-hades-ii",
+    "title": "Hades + Hades II",
+    "type": "package",
+    "mature": false
+  },
+  {
+    "id": "018f4ede-2a28-7329-8d44-04ca90233792",
+    "slug": "hades-ii-original-soundtrack",
+    "title": "Hades II Original Soundtrack",
+    "type": "dlc",
+    "mature": false
+  }
+]
