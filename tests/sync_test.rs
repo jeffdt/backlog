@@ -185,3 +185,69 @@ fn test_sync_skip_without_existing_cache_does_not_note_removal() {
         );
     }
 }
+
+#[test]
+fn test_sync_heroic_reports_added_and_removed_titles() {
+    // (previous epic cache or None, new library titles, expected added, expected removed)
+    type Row = (
+        Option<&'static [&'static str]>,
+        &'static [&'static str],
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+    const CASES: &[Row] = &[
+        (None, &["Celeste", "Hades"], &["Celeste", "Hades"], &[]),
+        (Some(&["Celeste"]), &["Celeste"], &[], &[]),
+        (
+            Some(&["Celeste"]),
+            &["Celeste", "Ōkami HD"],
+            &["Ōkami HD"],
+            &[],
+        ),
+        (
+            Some(&["Celeste", "Control™"]),
+            &["Celeste"],
+            &[],
+            &["Control™"],
+        ),
+        (Some(&["Hades"]), &["Hades II"], &["Hades II"], &["Hades"]),
+        (Some(&["Celeste"]), &[], &[], &["Celeste"]),
+        (Some(&["Celeste", "Celeste"]), &["Celeste"], &[], &[]),
+    ];
+
+    let mut misses = Vec::new();
+    for (old, new, want_added, want_removed) in CASES {
+        let heroic_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let library: Vec<String> = new
+            .iter()
+            .map(|t| format!(r#"{{"title": "{t}", "app_name": "x"}}"#))
+            .collect();
+        fs::write(
+            heroic_dir.path().join("legendary_library.json"),
+            format!(r#"{{"library": [{}]}}"#, library.join(",")),
+        )
+        .unwrap();
+        if let Some(old) = old {
+            let games: Vec<bouncer::Game> = old
+                .iter()
+                .map(|n| bouncer::Game {
+                    name: n.to_string(),
+                    platform: "epic".to_string(),
+                })
+                .collect();
+            cache::write_cache(&cache_dir.path().join("epic.json"), &games, "heroic_cache")
+                .unwrap();
+        }
+
+        let reports = sync::sync_heroic(heroic_dir.path(), cache_dir.path());
+        let epic = reports.iter().find(|r| r.platform == "epic").unwrap();
+        if epic.added != *want_added || epic.removed != *want_removed {
+            misses.push(format!(
+                "{old:?} -> {new:?}: added {:?} removed {:?}",
+                epic.added, epic.removed
+            ));
+        }
+    }
+    assert!(misses.is_empty(), "\n{}", misses.join("\n"));
+}

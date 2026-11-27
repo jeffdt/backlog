@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -14,16 +13,11 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
 
 use crate::LibraryEntry;
-use crate::cache;
 use crate::loader::{self, LoadResult};
 use crate::queue::{Filter, PLAYED_GLYPH, QUEUED_GLYPH, apply_filter};
 use crate::search;
 use crate::sync;
 use crate::sync::{SyncReport, SyncStatus};
-
-/// Platform cache filenames written by `sync::sync_all`, used to snapshot
-/// per-platform counts before a sync so the status row can show a delta.
-const SYNCED_PLATFORMS: [&str; 4] = ["epic", "gog", "amazon", "steam"];
 
 enum SyncState {
     Idle,
@@ -40,7 +34,6 @@ struct App {
     quit: bool,
     sync_state: SyncState,
     sync_rx: Option<mpsc::Receiver<Vec<SyncReport>>>,
-    sync_before_counts: HashMap<String, usize>,
     cache_dir: PathBuf,
     heroic_dir: PathBuf,
     config_path: PathBuf,
@@ -77,7 +70,6 @@ impl App {
             quit: false,
             sync_state: SyncState::Idle,
             sync_rx: None,
-            sync_before_counts: HashMap::new(),
             cache_dir,
             heroic_dir,
             config_path,
@@ -98,15 +90,6 @@ impl App {
         if matches!(self.sync_state, SyncState::Syncing) {
             return;
         }
-        self.sync_before_counts = SYNCED_PLATFORMS
-            .iter()
-            .map(|platform| {
-                let count = cache::read_cache(&self.cache_dir.join(format!("{platform}.json")))
-                    .map(|c| c.games.len())
-                    .unwrap_or(0);
-                (platform.to_string(), count)
-            })
-            .collect();
         let (tx, rx) = mpsc::channel();
         let cache_dir = self.cache_dir.clone();
         let heroic_dir = self.heroic_dir.clone();
@@ -515,14 +498,13 @@ fn platform_color(platform: &str) -> Color {
     }
 }
 
-fn format_sync_summary(reports: &[SyncReport], before_counts: &HashMap<String, usize>) -> String {
+fn format_sync_summary(reports: &[SyncReport]) -> String {
     reports
         .iter()
         .map(|r| {
             let value = match &r.status {
                 SyncStatus::Ok => {
-                    let before = before_counts.get(&r.platform).copied().unwrap_or(0);
-                    let delta = r.game_count as i64 - before as i64;
+                    let delta = r.added.len() as i64 - r.removed.len() as i64;
                     if delta >= 0 {
                         format!("+{delta}")
                     } else {
@@ -814,9 +796,7 @@ fn draw(f: &mut Frame, app: &App) {
     let status = match (&app.status_message, &app.sync_state) {
         (Some(message), _) => Span::styled(message.clone(), Style::default().fg(Color::Red)),
         (None, SyncState::Syncing) => Span::styled("syncing...", dim),
-        (None, SyncState::Done(reports)) => {
-            Span::styled(format_sync_summary(reports, &app.sync_before_counts), dim)
-        }
+        (None, SyncState::Done(reports)) => Span::styled(format_sync_summary(reports), dim),
         (None, SyncState::Idle) => Span::raw(""),
     };
     f.render_widget(Paragraph::new(Line::from(status)), status_area);
@@ -919,63 +899,55 @@ mod tests {
         )
     }
 
-    fn ok(platform: &str, count: usize) -> SyncReport {
+    fn ok(platform: &str, added: usize, removed: usize) -> SyncReport {
         SyncReport {
-            platform: platform.to_string(),
-            game_count: count,
-            status: SyncStatus::Ok,
+            added: vec![String::new(); added],
+            removed: vec![String::new(); removed],
+            ..SyncReport::without_games(platform, SyncStatus::Ok)
         }
     }
 
     #[test]
-    fn ok_reports_show_full_count_as_delta_when_no_prior_snapshot() {
-        let reports = vec![ok("steam", 42), ok("epic", 10)];
-        let before = HashMap::new();
-        assert_eq!(
-            format_sync_summary(&reports, &before),
-            "steam +42  epic +10"
-        );
-    }
-
-    #[test]
-    fn ok_reports_show_delta_from_before_counts() {
-        let reports = vec![ok("steam", 42), ok("epic", 10)];
-        let before = HashMap::from([("steam".to_string(), 39), ("epic".to_string(), 10)]);
-        assert_eq!(format_sync_summary(&reports, &before), "steam +3  epic +0");
-    }
-
-    #[test]
-    fn ok_report_shows_negative_delta_when_games_removed() {
-        let reports = vec![ok("steam", 40)];
-        let before = HashMap::from([("steam".to_string(), 42)]);
-        assert_eq!(format_sync_summary(&reports, &before), "steam -2");
-    }
-
-    #[test]
-    fn mixed_statuses_render_skip_and_error_words() {
-        let reports = vec![
-            ok("steam", 42),
-            SyncReport {
-                platform: "gog".to_string(),
-                game_count: 0,
-                status: SyncStatus::Skipped("gog_library.json not found".to_string()),
-            },
-            SyncReport {
-                platform: "amazon".to_string(),
-                game_count: 0,
-                status: SyncStatus::Error("network error".to_string()),
-            },
+    fn sync_summary_renders_each_platform() {
+        let cases: Vec<(Vec<SyncReport>, &str)> = vec![
+            (
+                vec![ok("steam", 42, 0), ok("epic", 10, 0)],
+                "steam +42  epic +10",
+            ),
+            (
+                vec![ok("steam", 3, 0), ok("epic", 0, 0)],
+                "steam +3  epic +0",
+            ),
+            (vec![ok("steam", 0, 2)], "steam -2"),
+            (vec![ok("steam", 2, 2)], "steam +0"),
+            (
+                vec![
+                    ok("steam", 42, 0),
+                    SyncReport::without_games(
+                        "gog",
+                        SyncStatus::Skipped("gog_library.json not found".to_string()),
+                    ),
+                    SyncReport::without_games(
+                        "amazon",
+                        SyncStatus::Error("network error".to_string()),
+                    ),
+                ],
+                "steam +42  gog skip  amazon error",
+            ),
         ];
-        let before = HashMap::new();
-        assert_eq!(
-            format_sync_summary(&reports, &before),
-            "steam +42  gog skip  amazon error"
-        );
+        let misses: Vec<String> = cases
+            .iter()
+            .filter_map(|(reports, want)| {
+                let got = format_sync_summary(reports);
+                (got != *want).then(|| format!("want {want:?}, got {got:?}"))
+            })
+            .collect();
+        assert!(misses.is_empty(), "\n{}", misses.join("\n"));
     }
 
     #[test]
     fn empty_reports_produce_empty_string() {
-        assert_eq!(format_sync_summary(&[], &HashMap::new()), "");
+        assert_eq!(format_sync_summary(&[]), "");
     }
 
     fn marker_chars(state: crate::queue::GameState) -> String {

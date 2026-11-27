@@ -35,8 +35,9 @@ needs. Press Enter to skip it and rerun `setup` later to add it.
 # that collide with a command name like "queue")
 bouncer "hollow knight"
 
-# Sync library caches from all sources
+# Sync library caches from all sources (-v lists the titles added and removed)
 bouncer sync
+bouncer sync -v
 
 # Print your ranked queue
 bouncer queue
