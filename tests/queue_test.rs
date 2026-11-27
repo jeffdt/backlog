@@ -270,6 +270,7 @@ fn library(names: &[&str]) -> Vec<LibraryEntry> {
         .map(|n| LibraryEntry {
             name: n.to_string(),
             platforms: vec!["steam".to_string()],
+            ..Default::default()
         })
         .collect()
 }

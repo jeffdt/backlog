@@ -6,15 +6,18 @@ fn setup_caches(dir: &TempDir) {
         Game {
             name: "Half-Life".to_string(),
             platform: "steam".to_string(),
+            ..Default::default()
         },
         Game {
             name: "Portal".to_string(),
             platform: "steam".to_string(),
+            ..Default::default()
         },
     ];
     let games_epic = vec![Game {
         name: "Celeste".to_string(),
         platform: "epic".to_string(),
+        ..Default::default()
     }];
     cache::write_cache(&dir.path().join("steam.json"), &games_steam, "steam_api").unwrap();
     cache::write_cache(&dir.path().join("epic.json"), &games_epic, "heroic_cache").unwrap();
@@ -36,10 +39,12 @@ fn test_dedupe_collapses_cross_store_duplicates() {
         Game {
             name: "Card Shark".to_string(),
             platform: "epic".to_string(),
+            ..Default::default()
         },
         Game {
             name: "Card Shark".to_string(),
             platform: "steam".to_string(),
+            ..Default::default()
         },
     ];
     let entries = loader::dedupe(games);
@@ -54,10 +59,12 @@ fn test_dedupe_keeps_distinct_games_separate() {
         Game {
             name: "Hades".to_string(),
             platform: "epic".to_string(),
+            ..Default::default()
         },
         Game {
             name: "Celeste".to_string(),
             platform: "epic".to_string(),
+            ..Default::default()
         },
     ];
     let entries = loader::dedupe(games);
@@ -70,10 +77,12 @@ fn test_dedupe_folds_case_and_trim_but_keeps_first_seen_display() {
         Game {
             name: "Card Shark".to_string(),
             platform: "epic".to_string(),
+            ..Default::default()
         },
         Game {
             name: "  card shark  ".to_string(),
             platform: "steam".to_string(),
+            ..Default::default()
         },
     ];
     let entries = loader::dedupe(games);
@@ -88,10 +97,12 @@ fn test_dedupe_collapses_intra_platform_duplicates() {
         Game {
             name: "Portal".to_string(),
             platform: "steam".to_string(),
+            ..Default::default()
         },
         Game {
             name: "Portal".to_string(),
             platform: "steam".to_string(),
+            ..Default::default()
         },
     ];
     let entries = loader::dedupe(games);
@@ -105,10 +116,12 @@ fn test_dedupe_preserves_first_seen_order() {
         Game {
             name: "Zelda".to_string(),
             platform: "steam".to_string(),
+            ..Default::default()
         },
         Game {
             name: "Abzu".to_string(),
             platform: "epic".to_string(),
+            ..Default::default()
         },
     ];
     let entries = loader::dedupe(games);
@@ -182,10 +195,12 @@ fn dedupe_merges_exactly_the_names_queue_normalize_key_agrees_on() {
                 Game {
                     name: a.to_string(),
                     platform: "steam".to_string(),
+                    ..Default::default()
                 },
                 Game {
                     name: b.to_string(),
                     platform: "epic".to_string(),
+                    ..Default::default()
                 },
             ]);
             let merged = entries.len() == 1;
@@ -196,4 +211,25 @@ fn dedupe_merges_exactly_the_names_queue_normalize_key_agrees_on() {
             );
         }
     }
+}
+
+#[test]
+fn test_dedupe_keeps_first_seen_per_platform() {
+    let stamp = "2026-01-01T00:00:00+00:00";
+    let entries = loader::dedupe(vec![
+        Game {
+            name: "Celeste".to_string(),
+            platform: "epic".to_string(),
+            first_seen: Some(stamp.to_string()),
+        },
+        Game {
+            name: "Celeste".to_string(),
+            platform: "steam".to_string(),
+            first_seen: None,
+        },
+    ]);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].platforms, ["epic", "steam"]);
+    assert_eq!(entries[0].first_seen.len(), 1);
+    assert_eq!(entries[0].first_seen["epic"], stamp);
 }

@@ -1,4 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+
+use chrono::Utc;
 use std::path::Path;
 
 use crate::Game;
@@ -43,10 +45,25 @@ impl SyncReport {
 /// removed relative to the cache it replaces. A failed write keeps the old
 /// cache and reports no changes.
 fn write_and_report(platform: &str, cache_path: &Path, games: &[Game], source: &str) -> SyncReport {
-    let old_names: BTreeSet<String> = cache::read_cache(cache_path)
-        .map(|c| c.games.into_iter().map(|g| g.name).collect())
-        .unwrap_or_default();
-    if let Err(e) = cache::write_cache(cache_path, games, source) {
+    let old: Option<HashMap<String, Option<String>>> = cache::read_cache(cache_path).map(|c| {
+        c.games
+            .into_iter()
+            .map(|g| (g.name, g.first_seen))
+            .collect()
+    });
+    let old_names: BTreeSet<String> = old.iter().flat_map(|m| m.keys().cloned()).collect();
+    let now = Utc::now().to_rfc3339();
+    let stamped: Vec<Game> = games
+        .iter()
+        .map(|g| Game {
+            first_seen: match &old {
+                Some(m) => m.get(&g.name).cloned().unwrap_or_else(|| Some(now.clone())),
+                None => None,
+            },
+            ..g.clone()
+        })
+        .collect();
+    if let Err(e) = cache::write_cache(cache_path, &stamped, source) {
         return SyncReport::without_games(platform, SyncStatus::Error(e.to_string()));
     }
     let new_names: BTreeSet<String> = games.iter().map(|g| g.name.clone()).collect();

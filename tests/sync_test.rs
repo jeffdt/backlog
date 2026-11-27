@@ -234,6 +234,7 @@ fn test_sync_heroic_reports_added_and_removed_titles() {
                 .map(|n| bouncer::Game {
                     name: n.to_string(),
                     platform: "epic".to_string(),
+                    ..Default::default()
                 })
                 .collect();
             cache::write_cache(&cache_dir.path().join("epic.json"), &games, "heroic_cache")
@@ -299,4 +300,105 @@ fn test_sync_amazon_prefers_nile_library_over_heroic_cache() {
         }
     }
     assert!(misses.is_empty(), "misses:\n{}", misses.join("\n"));
+}
+
+#[test]
+fn test_sync_stamps_first_seen() {
+    enum Want {
+        Carried(&'static str),
+        Stamped,
+        None,
+    }
+    type OldCache = Option<&'static [(&'static str, Option<&'static str>)]>;
+    const DATE: &str = "2026-01-01T00:00:00+00:00";
+    type Row = (
+        OldCache,
+        &'static [&'static str],
+        &'static [(&'static str, Want)],
+    );
+    const CASES: &[Row] = &[
+        (None, &["A", "B"], &[("A", Want::None), ("B", Want::None)]),
+        (
+            Some(&[("A", None)]),
+            &["A", "B"],
+            &[("A", Want::None), ("B", Want::Stamped)],
+        ),
+        (
+            Some(&[("A", Some(DATE))]),
+            &["A"],
+            &[("A", Want::Carried(DATE))],
+        ),
+        (
+            Some(&[("A", Some(DATE)), ("B", None)]),
+            &["B", "C"],
+            &[("B", Want::None), ("C", Want::Stamped)],
+        ),
+    ];
+
+    let mut misses = Vec::new();
+    let mut run = |label: String,
+                   write_old: &dyn Fn(&std::path::Path),
+                   new: &[&str],
+                   want: &[(&str, Want)]| {
+        let heroic_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let library: Vec<String> = new
+            .iter()
+            .map(|t| format!(r#"{{"title": "{t}", "app_name": "x"}}"#))
+            .collect();
+        fs::write(
+            heroic_dir.path().join("legendary_library.json"),
+            format!(r#"{{"library": [{}]}}"#, library.join(",")),
+        )
+        .unwrap();
+        let cache_path = cache_dir.path().join("epic.json");
+        write_old(&cache_path);
+        sync::sync_heroic(heroic_dir.path(), cache_dir.path());
+        let got = cache::read_cache(&cache_path).unwrap();
+        for (title, want) in want {
+            let stamp = got
+                .games
+                .iter()
+                .find(|g| g.name == *title)
+                .and_then(|g| g.first_seen.clone());
+            let ok = match want {
+                Want::None => stamp.is_none(),
+                Want::Carried(d) => stamp.as_deref() == Some(*d),
+                Want::Stamped => stamp
+                    .as_deref()
+                    .is_some_and(|s| chrono::DateTime::parse_from_rfc3339(s).is_ok()),
+            };
+            if !ok {
+                misses.push(format!("{label} {title}: got {stamp:?}"));
+            }
+        }
+    };
+
+    for (old, new, want) in CASES {
+        run(
+            format!("{old:?} -> {new:?}"),
+            &|path| {
+                if let Some(old) = old {
+                    let games: Vec<bouncer::Game> = old
+                        .iter()
+                        .map(|(n, d)| bouncer::Game {
+                            name: n.to_string(),
+                            platform: "epic".to_string(),
+                            first_seen: d.map(str::to_string),
+                        })
+                        .collect();
+                    cache::write_cache(path, &games, "heroic_cache").unwrap();
+                }
+            },
+            new,
+            want,
+        );
+    }
+    run(
+        "malformed old cache".to_string(),
+        &|path| fs::write(path, "{not json").unwrap(),
+        &["A"],
+        &[("A", Want::None)],
+    );
+    assert!(misses.is_empty(), "\n{}", misses.join("\n"));
 }

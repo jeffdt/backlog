@@ -99,6 +99,7 @@ pub fn parse_steam_response(data: &serde_json::Value) -> Vec<Game> {
             Some(Game {
                 name: name.to_string(),
                 platform: "steam".to_string(),
+                ..Default::default()
             })
         })
         .collect()

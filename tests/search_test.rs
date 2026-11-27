@@ -81,6 +81,7 @@ fn library() -> Vec<LibraryEntry> {
         .map(|name| LibraryEntry {
             name: name.to_string(),
             platforms: vec!["steam".to_string()],
+            ..Default::default()
         })
         .collect()
 }
@@ -557,6 +558,7 @@ fn cross_store_dupe_yields_single_result() {
     let library = vec![LibraryEntry {
         name: "Card Shark".to_string(),
         platforms: vec!["epic".to_string(), "steam".to_string()],
+        ..Default::default()
     }];
     let results = search::fuzzy_search("card shark", &library);
     assert_eq!(results.len(), 1);

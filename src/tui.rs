@@ -966,6 +966,7 @@ mod tests {
                 .map(|name| LibraryEntry {
                     name: name.to_string(),
                     platforms: vec!["steam".to_string()],
+                    ..Default::default()
                 })
                 .collect(),
             warnings: Vec::new(),
