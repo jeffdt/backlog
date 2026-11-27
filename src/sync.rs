@@ -22,12 +22,25 @@ pub struct SyncReport {
     pub status: SyncStatus,
 }
 
+/// Removes the cache at `cache_path` for a source that no longer exists, so its
+/// games stop appearing in results, and appends a note to `reason` when a file
+/// was actually removed.
+fn skip_and_remove_cache(cache_path: &Path, reason: String) -> SyncStatus {
+    match std::fs::remove_file(cache_path) {
+        Ok(()) => SyncStatus::Skipped(format!("{reason}, removed cached library")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SyncStatus::Skipped(reason),
+        Err(e) => SyncStatus::Error(format!(
+            "{reason}, but could not remove cached library: {e}"
+        )),
+    }
+}
+
 /// Syncs all three Heroic-managed stores (Epic, GOG, Amazon) from `heroic_dir`,
 /// writing each to a separate cache file in `cache_dir`.
 ///
 /// A source is reported as `Skipped` only when its library file does not exist
-/// and the loader returns no games. If the file exists but is empty, the cache
-/// is still written (with zero entries).
+/// and the loader returns no games; its existing cache is then removed. If the
+/// file exists but is empty, the cache is still written (with zero entries).
 pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
     let sources: Vec<HeroicSource> = vec![
         ("epic", heroic::load_epic, "legendary_library.json"),
@@ -40,14 +53,14 @@ pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
         .map(|(platform, loader, filename)| {
             let source_path = heroic_dir.join(filename);
             let games = loader(&source_path);
+            let cache_path = cache_dir.join(format!("{platform}.json"));
             if games.is_empty() && !source_path.exists() {
                 return SyncReport {
                     platform: platform.to_string(),
                     game_count: 0,
-                    status: SyncStatus::Skipped(format!("{filename} not found")),
+                    status: skip_and_remove_cache(&cache_path, format!("{filename} not found")),
                 };
             }
-            let cache_path = cache_dir.join(format!("{platform}.json"));
             match cache::write_cache(&cache_path, &games, "heroic_cache") {
                 Ok(()) => SyncReport {
                     platform: platform.to_string(),
@@ -66,14 +79,18 @@ pub fn sync_heroic(heroic_dir: &Path, cache_dir: &Path) -> Vec<SyncReport> {
 
 /// Syncs the Steam library using credentials from `config_path`.
 ///
-/// Returns `Skipped` if no config file exists. Returns `Error` if the API
-/// call or cache write fails.
+/// Returns `Skipped` and removes the Steam cache if no config file exists.
+/// Returns `Error`, keeping the existing cache, if the API call or cache write
+/// fails.
 pub fn sync_steam(config_path: &Path, cache_dir: &Path) -> SyncReport {
     let Some(cfg) = config::load_config(config_path) else {
         return SyncReport {
             platform: "steam".to_string(),
             game_count: 0,
-            status: SyncStatus::Skipped("no config found, run `bouncer setup` first".to_string()),
+            status: skip_and_remove_cache(
+                &cache_dir.join("steam.json"),
+                "no config found, run `bouncer setup` first".to_string(),
+            ),
         };
     };
     match steam::fetch_steam_library(&cfg.steam_api_key, &cfg.steam_id) {

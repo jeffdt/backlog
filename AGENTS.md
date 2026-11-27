@@ -203,3 +203,10 @@ exists). Shows live fuzzy results as the user types, plus a human-readable
   history, not approval. If the session was kicked off from a GitHub issue
   on this repo, reference it in the PR body with `Closes #N` so the issue
   links and auto-closes on merge.
+- **Every merge to `main` that changes shipped behavior also cuts a
+  release.** Users install from the `jeffdt/homebrew-tap` formula, which
+  only sees tagged release binaries, so a merged change with no release
+  never reaches `brew upgrade`. Unless a change is purely internal (docs,
+  tests, CI), finish in the same session with the `cutting-a-release`
+  skill: the version bump rides in the PR, then tag and update the tap
+  after it merges. Don't leave `main` ahead of the latest release.
