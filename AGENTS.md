@@ -174,6 +174,44 @@ exists). Shows live fuzzy results as the user types, plus a human-readable
   imposing fixed colors, which matters more than ever now that the queue
   markers depend on theme inheritance too.
 
+## Regenerating the README demo GIFs
+
+The README's demo GIFs (`docs/images/search.gif`, `queue.gif`) are
+generated, not hand-recorded. Prerequisites: `cargo` and `vhs`
+(`brew install vhs`). From the repo root:
+
+```sh
+cargo build --release      # tapes record target/release/bouncer
+vhs docs/demo/search.tape
+vhs docs/demo/queue.tape
+```
+
+`docs/demo/seed-demo.sh` runs from inside each tape (via
+`common-setup.tape`). It mints a throwaway `$HOME` holding fresh platform
+caches and a seeded queue, then prints the path. Every bouncer path resolves
+from `$HOME`, so this isolates the cache, config, and queue at once, and the
+fresh timestamps skip the first-run sync, so recording needs no network or
+Steam key.
+
+**The seed data is load-bearing.** The tapes depend on specific titles
+(both Hollow Knights, two Grand Theft Autos, both Disco Elysiums, Into the
+Breach unqueued) and on the seeded queue order, with Outer Wilds both
+queued and played. Change the seed and the tape together.
+
+The README's search and queue output blocks are not GIFs: plain CLI output
+has nothing to watch, and a code block stays greppable and copy-pasteable.
+They are real output from the same seed, so they match the GIFs. Refresh
+them by pasting from `HOME=$(docs/demo/seed-demo.sh) target/release/bouncer
+<args>`. The price and sync blocks are real output from a live run (sync
+against a scratch copy of real caches with two titles removed, so `-v` has
+something to list).
+
+After rendering, watch each GIF with `qlmanage -p docs/images/<name>.gif &`.
+Preview.app shows only a static first frame. A change to the TUI's visible
+behavior (layout, colors, keys the tapes press) needs the affected GIF
+re-recorded in the same PR. See the `vhs-recording` skill (from the
+`tui-utils` plugin) for the general workflow.
+
 ## Working in this repo
 
 - **Always work in a dedicated `wt switch --create jeffdt/<domain>-<brief-desc>`
