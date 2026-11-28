@@ -1,5 +1,7 @@
 //! Reads a Steam cart and judges each item against the library and all-time lows.
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -358,6 +360,17 @@ fn get_json(url: &str, query: &[(&str, &str)]) -> Result<Value, String> {
         .read_to_string()
         .map_err(|e| format!("Steam request failed: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("Steam request failed: bad response: {e}"))
+}
+
+/// Reads the `exp` claim (unix seconds) from a JWT such as Steam's `webapi_token`,
+/// without verifying it. `None` when the token isn't a decodable JWT with `exp`.
+pub fn token_expiry(token: &str) -> Option<i64> {
+    let [_, payload, _] = token.split('.').collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let bytes = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    let json: Value = serde_json::from_slice(&bytes).ok()?;
+    json.get("exp")?.as_i64()
 }
 
 /// Fetches the cart of the user who owns `token` (a store `webapi_token`).

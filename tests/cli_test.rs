@@ -208,11 +208,17 @@ fn search_subcommand_searches_even_when_the_query_is_a_command_name() {
     assert!(stderr.contains("No games loaded"), "stderr: {stderr}");
 }
 
-fn run_cart_with_stdin(home: &std::path::Path, stdin: &str) -> std::process::Output {
+const EXPIRED_TOKEN: &str = "eyAidHlwIjogIkpXVCIgfQ.eyJleHAiOjE3MDAwMDAwMDB9.sig";
+
+fn run_cart(home: &std::path::Path, env_token: Option<&str>, stdin: &str) -> std::process::Output {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_bouncer"))
-        .env("HOME", home)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bouncer"));
+    cmd.env("HOME", home).env_remove("BOUNCER_STEAM_TOKEN");
+    if let Some(token) = env_token {
+        cmd.env("BOUNCER_STEAM_TOKEN", token);
+    }
+    let mut child = cmd
         .arg("cart")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -228,20 +234,33 @@ fn run_cart_with_stdin(home: &std::path::Path, stdin: &str) -> std::process::Out
     child.wait_with_output().unwrap()
 }
 
+/// Every row fails before any network call; "bouncer setup" (no ITAD key in the
+/// temp HOME) proves the token was accepted and the run moved on.
 #[test]
-fn cart_rejects_empty_stdin_before_any_network_call() {
-    let home = tempfile::TempDir::new().unwrap();
-    let out = run_cart_with_stdin(home.path(), "  \n");
-
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("no token"));
-}
-
-#[test]
-fn cart_without_itad_key_exits_with_setup_hint_before_using_the_token() {
-    let home = tempfile::TempDir::new().unwrap();
-    let out = run_cart_with_stdin(home.path(), "token\n");
-
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("bouncer setup"));
+fn cart_token_sources_fail_before_any_network_call() {
+    // (env token, stdin, stderr must contain, stderr must not contain)
+    const CASES: &[(Option<&str>, &str, &str, &str)] = &[
+        (None, "  \n", "no token", "bouncer setup"),
+        (None, "token\n", "bouncer setup", "no token"),
+        (Some("token"), "", "bouncer setup", "no token"),
+        (Some("  "), "token\n", "bouncer setup", "no token"),
+        (
+            Some(EXPIRED_TOKEN),
+            "",
+            "BOUNCER_STEAM_TOKEN expired",
+            "bouncer setup",
+        ),
+        (None, EXPIRED_TOKEN, "expired", "BOUNCER_STEAM_TOKEN"),
+    ];
+    let misses: Vec<String> = CASES
+        .iter()
+        .filter_map(|&(env, stdin, want, unwanted)| {
+            let home = tempfile::TempDir::new().unwrap();
+            let out = run_cart(home.path(), env, stdin);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let ok = !out.status.success() && stderr.contains(want) && !stderr.contains(unwanted);
+            (!ok).then(|| format!("env {env:?}, stdin {stdin:?}: stderr {stderr:?}"))
+        })
+        .collect();
+    assert!(misses.is_empty(), "\n{}", misses.join("\n"));
 }

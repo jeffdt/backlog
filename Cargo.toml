@@ -1,12 +1,13 @@
 [package]
 name = "bouncer"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 
 [package.metadata.tui-utils]
 config_isolation = "home"
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"

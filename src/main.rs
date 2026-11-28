@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, IsTerminal, Read, Write};
 
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 
 use bouncer::{cache, cart, config, itad, loader, output, queue, search, sources, sync};
@@ -94,15 +95,22 @@ out of a bundle; those games are shown as excluded and do not count.
 Packages use the live store price.
 
 Steam has no cart API for Web API keys, so this needs your store
-session token, read from stdin and never saved:
+session token, which bouncer never saves:
   1. While logged in, open
      https://store.steampowered.com/pointssummary/ajaxgetasyncconfig
   2. Copy the `webapi_token` value.
-  3. pbpaste | bouncer cart
+  3. export BOUNCER_STEAM_TOKEN=$(pbpaste)
+  4. bouncer cart  (as often as you like in that shell)
 
-The token grants full access to your Steam account until it expires.
-Treat it like a password: don't save it or paste it into anything you
-don't trust."#;
+Or pipe it in for a single run: pbpaste | bouncer cart
+
+The token grants full access to your Steam account until it expires
+(about a day). Treat it like a password: don't save it or paste it into
+anything you don't trust. Export it with $(pbpaste), never the literal
+value, so it stays out of shell history, and note that every program
+started from that shell can read it."#;
+
+const TOKEN_ENV_VAR: &str = "BOUNCER_STEAM_TOKEN";
 
 fn main() {
     let cli = Cli::parse();
@@ -223,17 +231,36 @@ fn run_cart(json: bool) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     };
-    // Refuse a terminal so the token is never typed where it echoes on screen.
-    if io::stdin().is_terminal() {
-        fail("pipe your Steam store token in, e.g. `pbpaste | bouncer cart`. See `bouncer cart --help`.".to_string());
-    }
-    let mut token = String::new();
-    io::stdin()
-        .read_to_string(&mut token)
-        .unwrap_or_else(|e| fail(format!("could not read token: {e}")));
+    let env_token = std::env::var(TOKEN_ENV_VAR)
+        .ok()
+        .filter(|t| !t.trim().is_empty());
+    let from_env = env_token.is_some();
+    let token = env_token.unwrap_or_else(|| {
+        // Refuse a terminal so the token is never typed where it echoes on screen.
+        if io::stdin().is_terminal() {
+            fail(format!(
+                "export {TOKEN_ENV_VAR}=$(pbpaste) or pipe your Steam store token in. See `bouncer cart --help`."
+            ));
+        }
+        let mut token = String::new();
+        io::stdin()
+            .read_to_string(&mut token)
+            .unwrap_or_else(|e| fail(format!("could not read token: {e}")));
+        token
+    });
     let token = token.trim();
     if token.is_empty() {
         fail("no token on stdin. See `bouncer cart --help`.".to_string());
+    }
+    if let Some(exp) = cart::token_expiry(token).and_then(|s| DateTime::from_timestamp(s, 0))
+        && exp <= Utc::now()
+    {
+        let age = loader::format_sync_age(Some(exp)).replacen("synced", "expired", 1);
+        fail(if from_env {
+            format!("the token in {TOKEN_ENV_VAR} {age}; fetch a fresh one and re-export it")
+        } else {
+            format!("the token {age}; fetch a fresh one")
+        });
     }
     let key = itad_key_or_exit();
 
