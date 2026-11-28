@@ -58,6 +58,10 @@ struct App {
     /// The details popup's checkbox cursor: `None` when the popup is closed,
     /// `0` on the queued row, `1` on the played row.
     details_cursor: Option<usize>,
+    /// False until ↑/↓ is pressed on the home screen. The home screen opens
+    /// with nothing selected so the search box, not the queue, reads as the
+    /// focus.
+    home_cursor: bool,
 }
 
 impl App {
@@ -93,17 +97,38 @@ impl App {
             pinned_unqueued: false,
             status_message,
             details_cursor: None,
+            home_cursor: false,
         }
     }
 
-    /// The library narrowed to the active filter, in the order it renders.
+    /// True on the home screen (empty search, `All` filter), which shows the
+    /// head of the queue as UP NEXT instead of the whole library.
+    fn on_home(&self) -> bool {
+        self.input.is_empty() && self.filter == Filter::All
+    }
+
+    /// The filter whose rows are on screen: `Queued` on the home screen.
+    fn view_filter(&self) -> Filter {
+        if self.on_home() {
+            Filter::Queued
+        } else {
+            self.filter
+        }
+    }
+
+    /// The library narrowed to the rows on screen, in the order they render:
+    /// the active filter, or the first `UP_NEXT_ROWS` of the queue at home.
     fn filtered(&self) -> Vec<LibraryEntry> {
-        crate::queue::apply_filter_keeping(
+        let mut rows = crate::queue::apply_filter_keeping(
             &self.games,
             &self.queue,
-            self.filter,
+            self.view_filter(),
             self.pinned.as_deref(),
-        )
+        );
+        if self.on_home() {
+            rows.truncate(UP_NEXT_ROWS);
+        }
+        rows
     }
 
     /// The pinned game, if it no longer matches the active filter and is only
@@ -111,7 +136,7 @@ impl App {
     /// pinned game that still matches is not going anywhere.
     fn leaving_game(&self) -> Option<String> {
         let pinned = self.pinned.as_deref()?;
-        let matching = crate::queue::apply_filter(&self.games, &self.queue, self.filter);
+        let matching = crate::queue::apply_filter(&self.games, &self.queue, self.view_filter());
         (!matching.iter().any(|g| g.name == pinned)).then(|| pinned.to_string())
     }
 
@@ -121,6 +146,7 @@ impl App {
         self.pinned = None;
         self.pinned_unqueued = false;
         self.selected = 0;
+        self.home_cursor = false;
     }
 
     /// Moves the cursor one row, releasing the pinned row.
@@ -129,6 +155,11 @@ impl App {
     /// left once the pin is gone, so a pinned row dropping out above the
     /// cursor does not make it skip a game.
     fn move_cursor(&mut self, down: bool) {
+        if self.on_home() && !self.home_cursor {
+            self.home_cursor = true;
+            self.selected = 0;
+            return;
+        }
         let target = self.selected_row().map(|(current, _)| {
             let filtered = self.filtered();
             let rows = search::fuzzy_search(&self.input, &filtered);
@@ -203,6 +234,7 @@ impl App {
         };
         self.pinned = Some(name.clone());
         self.pinned_unqueued = was_unqueued;
+        self.home_cursor = true;
         let row = search::fuzzy_search(&self.input, &self.filtered())
             .iter()
             .position(|r| r.game.name == name);
@@ -242,8 +274,12 @@ impl App {
     }
 
     /// The cursor position clamped to the currently visible rows, paired with
-    /// the game at that row. `None` when there are no visible rows.
+    /// the game at that row. `None` when there are no visible rows, or on the
+    /// home screen before ↑/↓ has been pressed.
     fn selected_row(&self) -> Option<(usize, String)> {
+        if self.on_home() && !self.home_cursor {
+            return None;
+        }
         let filtered = self.filtered();
         let results = search::fuzzy_search(&self.input, &filtered);
         if results.is_empty() {
@@ -254,13 +290,7 @@ impl App {
     }
 
     /// The game under the cursor, resolved against the currently visible rows.
-    ///
-    /// Mirrors `draw`'s guard: the blank default screen (empty query, `All`
-    /// filter) shows no rows, so it must not resolve to a game either.
     fn selected_game(&self) -> Option<String> {
-        if self.input.is_empty() && self.filter == crate::queue::Filter::All {
-            return None;
-        }
         self.selected_row().map(|(_, name)| name)
     }
 
@@ -616,14 +646,17 @@ fn styled_hint(text: &str) -> Line<'static> {
 }
 
 /// The footer's key hint, naming only keys that do something right now:
-/// row keys only when rows exist, ranking only under the queued filter.
-fn hint_text(filter: Filter, has_rows: bool) -> &'static str {
-    match (has_rows, filter == Filter::Queued) {
-        (false, _) => "type search · tab filter · ^r sync · esc quit",
-        (true, true) => {
+/// row keys only when a row is selected, ranking only under the queued filter.
+fn hint_text(filter: Filter, has_rows: bool, has_selection: bool) -> &'static str {
+    match (has_rows, has_selection, filter == Filter::Queued) {
+        (false, _, _) => "type search · tab filter · ^r sync · esc quit",
+        (true, false, _) => "type search · ↑↓ select · tab filter · ^r sync · esc quit",
+        (true, true, true) => {
             "↑↓ move · enter details · ^q queue · ^p played · ^j/^k rank · tab filter · esc quit"
         }
-        (true, false) => "↑↓ move · enter details · ^q queue · ^p played · tab filter · esc quit",
+        (true, true, false) => {
+            "↑↓ move · enter details · ^q queue · ^p played · tab filter · esc quit"
+        }
     }
 }
 
@@ -763,13 +796,33 @@ fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
 
 const UP_NEXT_ROWS: usize = 3;
 
-/// Body of the blank default screen, header first: the top of the queue for
-/// returning users, or a short key guide when the queue is empty.
+/// Styles a row under the cursor (dark background, bold) or leaving its view
+/// (dim), leaving the section gutter in the first span untouched.
+fn emphasize_row(spans: &mut [Span<'static>], selected: bool, leaving: bool) {
+    if !selected && !leaving {
+        return;
+    }
+    // Dim replaces bold on a leaving row: many terminals cannot show both.
+    let emphasis = if leaving {
+        Modifier::DIM
+    } else {
+        Modifier::BOLD
+    };
+    for span in spans.iter_mut().skip(1) {
+        if selected {
+            span.style = span.style.bg(Color::DarkGray);
+        }
+        span.style = span.style.add_modifier(emphasis);
+    }
+}
+
+/// Body of the home screen, header first: the selectable top of the queue
+/// for returning users, or a short key guide when the queue is empty.
 fn empty_state_lines(app: &App, width: u16) -> Vec<Line<'static>> {
-    let queued = apply_filter(&app.games, &app.queue, Filter::Queued);
+    let shown = app.filtered();
     let dim = Style::default().fg(Color::DarkGray);
 
-    if queued.is_empty() {
+    if shown.is_empty() {
         let color = Color::Blue;
         let key = |k: &str, desc: Vec<Span<'static>>| {
             let mut spans = vec![
@@ -808,12 +861,23 @@ fn empty_state_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         ];
     }
 
-    let color = filter_color(Filter::All);
-    let tail = format!("{} queued", queued.len());
-    let shown = &queued[..queued.len().min(UP_NEXT_ROWS)];
+    // The queue's color, since UP NEXT is the head of the queue.
+    let color = filter_color(Filter::Queued);
+    let queued = apply_filter(&app.games, &app.queue, Filter::Queued).len();
+    // Counts a pinned, just-unqueued row too, so it cancels out of `shown`.
+    let listed = crate::queue::apply_filter_keeping(
+        &app.games,
+        &app.queue,
+        Filter::Queued,
+        app.pinned.as_deref(),
+    )
+    .len();
+    let selected = app.selected_row().map(|(row, _)| row);
+    let leaving = app.leaving_game();
+    let tail = format!("{queued} queued");
     let mut lines = vec![section_header("UP NEXT", color, Some(&tail), width)];
     lines.extend(shown.iter().enumerate().map(|(i, e)| {
-        Line::from(result_row_spans(
+        let mut spans = result_row_spans(
             app,
             &e.name,
             &e.platforms,
@@ -821,15 +885,21 @@ fn empty_state_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             width as usize,
             Some(i + 1),
             color,
-        ))
+        );
+        emphasize_row(
+            &mut spans,
+            selected == Some(i),
+            leaving.as_deref() == Some(e.name.as_str()),
+        );
+        Line::from(spans)
     }));
-    if queued.len() > shown.len() {
+    if listed > shown.len() {
         lines.push(Line::from(vec![
             Span::styled("│", Style::default().fg(color)),
             Span::styled(
                 format!(
                     "  +{} more \u{b7} tab to see the full queue",
-                    queued.len() - shown.len()
+                    listed - shown.len()
                 ),
                 dim,
             ),
@@ -863,6 +933,32 @@ fn browse_title(filter: Filter) -> &'static str {
         Filter::Played => "PLAYED",
         Filter::Unplayed => "UNPLAYED",
     }
+}
+
+/// Columns taken by the `search ❯ ` prompt, where the typed text begins.
+const SEARCH_PROMPT_WIDTH: u16 = 9;
+
+/// The search box: a shell-style `search ❯` prompt, then the typed text. On
+/// the home screen with nothing typed, a dim placeholder sits one cell past
+/// the cursor, so the box reads as the place to start.
+fn search_line(app: &App) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled("search", Style::default().fg(Color::White)),
+        Span::styled(
+            " ❯ ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(app.input.clone()),
+    ];
+    if app.on_home() {
+        spans.push(Span::styled(
+            format!(" find a game in your {}-game library", app.games.len()),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn draw(f: &mut Frame, app: &App) {
@@ -911,26 +1007,13 @@ fn draw(f: &mut Frame, app: &App) {
         filter_area,
     );
 
-    const SEARCH_PROMPT: &str = "search: ";
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(SEARCH_PROMPT, dim),
-            Span::raw(app.input.clone()),
-        ])),
-        search_area,
-    );
-    let cursor_x = search_area.x
-        + SEARCH_PROMPT.len() as u16
-        + app.input[..app.cursor_pos].chars().count() as u16;
+    f.render_widget(Paragraph::new(search_line(app)), search_area);
+    let cursor_x =
+        search_area.x + SEARCH_PROMPT_WIDTH + app.input[..app.cursor_pos].chars().count() as u16;
     f.set_cursor_position((cursor_x, search_area.y));
 
-    let show_empty_state = app.input.is_empty() && app.filter == Filter::All;
     let filtered = app.filtered();
-    let results = if show_empty_state {
-        Vec::new()
-    } else {
-        search::fuzzy_search(&app.input, &filtered)
-    };
+    let results = search::fuzzy_search(&app.input, &filtered);
     let selected = app.selected.min(results.len().saturating_sub(1));
 
     // A queue problem outranks the sync summary: it is the only state here the
@@ -947,15 +1030,22 @@ fn draw(f: &mut Frame, app: &App) {
         rule_area,
     );
     f.render_widget(
-        Paragraph::new(styled_hint(hint_text(app.filter, !results.is_empty()))),
+        Paragraph::new(styled_hint(hint_text(
+            app.filter,
+            !results.is_empty(),
+            app.selected_row().is_some(),
+        ))),
         hint_area,
     );
 
-    if show_empty_state {
+    if app.on_home() {
         let mut lines = empty_state_lines(app, body_area.width);
         let header = lines.remove(0);
         f.render_widget(Paragraph::new(header), header_area);
         f.render_widget(Paragraph::new(lines), body_area);
+        if app.details_cursor.is_some() {
+            draw_details(f, app, body_area);
+        }
         return;
     }
 
@@ -999,22 +1089,11 @@ fn draw(f: &mut Frame, app: &App) {
             rank,
             color,
         );
-        let selected_row = i + scroll_offset == selected;
-        let leaving = leaving_game.as_deref() == Some(result.game.name.as_str());
-        if selected_row || leaving {
-            // Dim replaces bold on a leaving row: many terminals cannot show both.
-            let emphasis = if leaving {
-                Modifier::DIM
-            } else {
-                Modifier::BOLD
-            };
-            for span in spans.iter_mut().skip(1) {
-                if selected_row {
-                    span.style = span.style.bg(Color::DarkGray);
-                }
-                span.style = span.style.add_modifier(emphasis);
-            }
-        }
+        emphasize_row(
+            &mut spans,
+            i + scroll_offset == selected,
+            leaving_game.as_deref() == Some(result.game.name.as_str()),
+        );
         let row_area = Rect::new(body_area.x, body_area.y + i as u16, body_area.width, 1);
         f.render_widget(Paragraph::new(Line::from(spans)), row_area);
     }
@@ -1313,18 +1392,132 @@ mod tests {
     }
 
     #[test]
-    fn selected_game_is_none_on_the_blank_default_screen() {
+    fn search_line_shows_the_placeholder_only_on_the_home_screen() {
         let dir = TempDir::new().unwrap();
-        let app = test_app(&dir, &["Hollow Knight", "Hades"]);
+        let mut app = test_app(&dir, &["A", "B"]);
+        let text = |app: &App| line_text(&search_line(app));
+        let mut misses = Vec::new();
+        let home = "search ❯  find a game in your 2-game library";
+        if text(&app) != home {
+            misses.push(format!("home: {:?}", text(&app)));
+        }
+        app.input = "hk".to_string();
+        if text(&app) != "search ❯ hk" {
+            misses.push(format!("typed: {:?}", text(&app)));
+        }
+        app.input.clear();
+        app.filter = Filter::Queued;
+        if text(&app) != "search ❯ " {
+            misses.push(format!("queued tab: {:?}", text(&app)));
+        }
+        let prompt_width = text(&app).chars().count() as u16;
+        if prompt_width != SEARCH_PROMPT_WIDTH {
+            misses.push(format!("prompt is {prompt_width} cols"));
+        }
+        assert!(misses.is_empty(), "{misses:#?}");
+    }
+
+    #[test]
+    fn home_screen_with_an_empty_queue_has_nothing_to_select() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["Hollow Knight", "Hades"]);
+        assert_eq!(app.selected_game(), None);
+        app.toggle_queued();
+        assert!(app.queue.entries.is_empty());
+    }
+
+    #[test]
+    fn home_screen_cursor_walks_only_the_up_next_rows() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C", "D", "E"]);
+        queue_all(&mut app, &["A", "B", "C", "D"]);
+        app.reset_rows();
+        let mut seen = vec![app.selected_game()];
+        for _ in 0..5 {
+            app.move_cursor(true);
+            seen.push(app.selected_game());
+        }
+        let mut want = vec![None];
+        want.extend(["A", "B", "C", "C", "C"].map(|n| Some(n.to_string())));
+        assert_eq!(seen, want);
+    }
+
+    #[test]
+    fn home_screen_starts_unselected_and_returns_there_after_a_search() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B"]);
+        queue_all(&mut app, &["A", "B"]);
+        app.reset_rows();
+        handle_list_key(&mut app, ctrl('p'));
+        handle_list_key(&mut app, key(KeyCode::Enter));
+        assert!(
+            !app.queue.state("A").played,
+            "^p acted with nothing selected"
+        );
+        assert_eq!(
+            app.details_cursor, None,
+            "enter opened with nothing selected"
+        );
+        handle_list_key(&mut app, key(KeyCode::Up));
+        assert_eq!(app.selected_game(), Some("A".to_string()));
+        handle_list_key(&mut app, key(KeyCode::Char('b')));
+        handle_list_key(&mut app, key(KeyCode::Backspace));
         assert_eq!(app.selected_game(), None);
     }
 
     #[test]
-    fn enter_on_the_blank_default_screen_does_not_queue_anything() {
+    fn home_screen_keys_act_on_the_up_next_row_under_the_cursor() {
         let dir = TempDir::new().unwrap();
-        let mut app = test_app(&dir, &["Hollow Knight", "Hades"]);
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        queue_all(&mut app, &["A", "B"]);
+        app.reset_rows();
+        app.move_cursor(true);
+        app.move_cursor(true);
+        handle_list_key(&mut app, ctrl('p'));
+        assert!(app.queue.state("B").played);
+        handle_list_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.details_cursor, Some(0));
+        assert_eq!(app.selected_game(), Some("B".to_string()));
+    }
+
+    #[test]
+    fn unqueueing_from_home_keeps_the_row_until_the_cursor_moves() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C", "D", "E"]);
+        queue_all(&mut app, &["A", "B", "C", "D", "E"]);
+        app.reset_rows();
+        app.move_cursor(true);
         app.toggle_queued();
-        assert!(app.queue.entries.is_empty());
+        let lines = empty_state_lines(&app, 60);
+        let t = texts(&lines);
+        assert!(t[0].ends_with("─ 4 queued"), "{}", t[0]);
+        assert!(t[1].contains('A'), "{}", t[1]);
+        assert!(lines[1].spans[1].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(
+            t[4].trim_end(),
+            "│  +2 more \u{b7} tab to see the full queue"
+        );
+        app.move_cursor(true);
+        assert_eq!(app.selected_game(), Some("B".to_string()));
+        assert!(!texts(&empty_state_lines(&app, 60))[1].contains('A'));
+    }
+
+    #[test]
+    fn home_screen_highlights_only_the_selected_up_next_row() {
+        let dir = TempDir::new().unwrap();
+        let mut app = test_app(&dir, &["A", "B", "C"]);
+        queue_all(&mut app, &["A", "B", "C"]);
+        app.reset_rows();
+        let highlighted = |app: &App| -> Vec<bool> {
+            empty_state_lines(app, 60)[1..]
+                .iter()
+                .map(|l| l.spans[1].style.bg == Some(Color::DarkGray))
+                .collect()
+        };
+        assert_eq!(highlighted(&app), [false, false, false]);
+        app.move_cursor(true);
+        app.move_cursor(true);
+        assert_eq!(highlighted(&app), [false, true, false]);
     }
 
     #[test]
@@ -1619,7 +1812,7 @@ mod tests {
         assert_eq!(t.len(), 5);
         assert!(t[0].starts_with("UP NEXT ─"), "{}", t[0]);
         assert!(t[0].ends_with("─ 5 queued"), "{}", t[0]);
-        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Magenta));
+        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Cyan));
         for (i, name) in ["A", "B", "C"].iter().enumerate() {
             assert!(
                 t[i + 1].starts_with(&format!("│{}  ", i + 1)),
@@ -1632,7 +1825,7 @@ mod tests {
             t[4].trim_end(),
             "│  +2 more \u{b7} tab to see the full queue"
         );
-        assert_eq!(lines[4].spans[0].style.fg, Some(Color::Magenta));
+        assert_eq!(lines[4].spans[0].style.fg, Some(Color::Cyan));
     }
 
     #[test]
@@ -1702,7 +1895,11 @@ mod tests {
         let version = format!("‹ v{} ›─╯", env!("CARGO_PKG_VERSION"));
         assert!(rows[29].ends_with(&version), "{}", rows[29]);
         assert!(rows[1].contains("all 3   ·   » queued 0"), "{}", rows[1]);
-        assert!(rows[3].starts_with("│ search: "), "{}", rows[3]);
+        assert!(
+            rows[3].starts_with("│ search ❯  find a game in your 3-game library"),
+            "{}",
+            rows[3]
+        );
         assert!(rows[5].contains("GETTING STARTED ─"), "{}", rows[5]);
         let rule = rows[27].trim_matches(|c| c == '│' || c == ' ');
         assert!(
@@ -1886,24 +2083,33 @@ mod tests {
     fn hint_text_only_names_keys_that_apply() {
         const ROWS: &str = "↑↓ move · enter details · ^q queue · ^p played";
         const NO_ROWS: &str = "type search · tab filter · ^r sync · esc quit";
+        const UNSELECTED: &str = "type search · ↑↓ select · tab filter · ^r sync · esc quit";
         let cases = [
-            (Filter::All, false, NO_ROWS.to_string()),
-            (Filter::Queued, false, NO_ROWS.to_string()),
-            (Filter::All, true, format!("{ROWS} · tab filter · esc quit")),
+            (Filter::All, false, false, NO_ROWS.to_string()),
+            (Filter::Queued, false, false, NO_ROWS.to_string()),
+            (Filter::All, true, false, UNSELECTED.to_string()),
+            (
+                Filter::All,
+                true,
+                true,
+                format!("{ROWS} · tab filter · esc quit"),
+            ),
             (
                 Filter::Played,
+                true,
                 true,
                 format!("{ROWS} · tab filter · esc quit"),
             ),
             (
                 Filter::Queued,
                 true,
+                true,
                 format!("{ROWS} · ^j/^k rank · tab filter · esc quit"),
             ),
         ];
         let misses: Vec<_> = cases
             .iter()
-            .filter(|(f, r, want)| hint_text(*f, *r) != *want)
+            .filter(|(f, r, s, want)| hint_text(*f, *r, *s) != *want)
             .collect();
         assert!(misses.is_empty(), "{misses:?}");
     }

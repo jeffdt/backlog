@@ -1,9 +1,8 @@
-use std::collections::{BTreeSet, HashMap};
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, Write};
 
 use clap::{Parser, Subcommand};
 
-use bouncer::{cache, cart, config, itad, loader, output, queue, search, sources, sync};
+use bouncer::{cache, config, itad, loader, output, queue, search, sources, sync};
 
 #[derive(Parser)]
 #[command(
@@ -51,13 +50,6 @@ enum Commands {
         #[arg(required = true)]
         inputs: Vec<String>,
     },
-    /// Judge a Steam cart against your library and all-time lows
-    #[command(long_about = CART_LONG_ABOUT)]
-    Cart {
-        /// Print results as JSON
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 const PRICE_LONG_ABOUT: &str = r#"Look up current and historical prices on IsThereAnyDeal.
@@ -70,39 +62,15 @@ Columns: Steam's current price, the best current price across stores
 (with the store, which may be a key reseller or another launcher), and
 the all-time low (with store and date).
 
-To check a whole Steam cart at once, see `bouncer cart --help`.
+Checking a Steam cart:
+  1. For each game, run `bouncer search "<title>"` to see if you already own it.
+     A match on any platform, Steam included, means you may not need it.
+  2. Run one `bouncer price "<title>" "<title>" ...` for the rest.
+  For bundles that "include 1 item", price the included game, and compare
+  against the cart price: Steam's complete-the-set discount is not in
+  IsThereAnyDeal's Steam price.
 
 Exits 1 if any input could not be found."#;
-
-const CART_LONG_ABOUT: &str = r#"Judge every item in your Steam cart.
-
-Each item is checked against your synced library (any platform) and its
-IsThereAnyDeal price history, then marked:
-  at low           at or under the all-time low from any store
-  at Steam low     at or under Steam's own low, but another store went lower
-  above Steam low  Steam itself has sold it cheaper
-  above low        above the all-time low, with no Steam low known
-  already owned    you own a game in it on some platform
-  nothing new      a bundle whose games you all own on Steam
-  no low known     no price history to compare against
-
-Totals follow: the cart, every item at today's cheapest store, at
-Steam's lows, and at all-time lows.
-
-Bundles use the cart price, since Steam leaves games you own on Steam
-out of a bundle; those games are shown as excluded and do not count.
-Packages use the live store price.
-
-Steam has no cart API for Web API keys, so this needs your store
-session token, read from stdin and never saved:
-  1. While logged in, open
-     https://store.steampowered.com/pointssummary/ajaxgetasyncconfig
-  2. Copy the `webapi_token` value.
-  3. pbpaste | bouncer cart
-
-The token grants full access to your Steam account until it expires.
-Treat it like a password: don't save it or paste it into anything you
-don't trust."#;
 
 fn main() {
     let cli = Cli::parse();
@@ -118,7 +86,6 @@ fn main() {
         Some(Commands::Sync { verbose }) => run_sync(verbose),
         Some(Commands::Queue) => run_queue(),
         Some(Commands::Price { json, inputs }) => run_price(&inputs, json),
-        Some(Commands::Cart { json }) => run_cart(json),
         None => {
             if let Some(query) = cli.query {
                 run_search(&query);
@@ -181,7 +148,13 @@ fn run_price(inputs: &[String], json: bool) {
         eprintln!("Error: empty input");
         std::process::exit(1);
     }
-    let key = itad_key_or_exit();
+    let key = config::load_config(&config::default_config_path())
+        .and_then(|c| c.itad_api_key)
+        .filter(|k| !k.is_empty());
+    let Some(key) = key else {
+        eprintln!("No IsThereAnyDeal API key. Run `bouncer setup` to add one.");
+        std::process::exit(1);
+    };
     let groups = itad::check_prices(&key, inputs).unwrap_or_else(|e| {
         eprintln!("Error: {e}");
         std::process::exit(1);
@@ -204,82 +177,6 @@ fn run_price(inputs: &[String], json: bool) {
         > 0
     {
         std::process::exit(1);
-    }
-}
-
-/// Returns the configured IsThereAnyDeal key, exiting with setup advice when absent.
-fn itad_key_or_exit() -> String {
-    let key = config::load_config(&config::default_config_path())
-        .and_then(|c| c.itad_api_key)
-        .filter(|k| !k.is_empty());
-    key.unwrap_or_else(|| {
-        eprintln!("No IsThereAnyDeal API key. Run `bouncer setup` to add one.");
-        std::process::exit(1);
-    })
-}
-
-fn run_cart(json: bool) {
-    let fail = |e: String| -> ! {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
-    };
-    // Refuse a terminal so the token is never typed where it echoes on screen.
-    if io::stdin().is_terminal() {
-        fail("pipe your Steam store token in, e.g. `pbpaste | bouncer cart`. See `bouncer cart --help`.".to_string());
-    }
-    let mut token = String::new();
-    io::stdin()
-        .read_to_string(&mut token)
-        .unwrap_or_else(|e| fail(format!("could not read token: {e}")));
-    let token = token.trim();
-    if token.is_empty() {
-        fail("no token on stdin. See `bouncer cart --help`.".to_string());
-    }
-    let key = itad_key_or_exit();
-
-    let lines = cart::fetch_cart(token).unwrap_or_else(|e| fail(e));
-    if lines.is_empty() {
-        eprintln!("Cart is empty.");
-        return;
-    }
-    let items = cart::fetch_store_items(&lines).unwrap_or_else(|e| fail(e));
-    let appids: BTreeSet<u64> = items
-        .values()
-        .flat_map(|i| i.apps.iter().map(|(id, _)| *id))
-        .collect();
-    let inputs: Vec<String> = appids.iter().map(u64::to_string).collect();
-    let groups = itad::check_prices(&key, &inputs).unwrap_or_else(|e| fail(e));
-    let prices: HashMap<_, _> = appids
-        .into_iter()
-        .zip(groups)
-        .map(|(id, g)| {
-            let game = g.games.into_iter().next();
-            let prices = game.map_or_else(cart::AppPrices::default, |g| cart::AppPrices {
-                steam_low: g.steam.and_then(|s| s.store_low),
-                best: g.best,
-                low: g.low,
-            });
-            (id, prices)
-        })
-        .collect();
-
-    let library = loader::load_all_games(&cache::default_cache_dir());
-    for w in &library.warnings {
-        eprintln!("Warning: {w}");
-    }
-    if library.games.is_empty() {
-        eprintln!(
-            "Warning: no games loaded, so ownership is not checked. Run `bouncer sync` first."
-        );
-    }
-
-    let rows = cart::assess(&lines, &items, &library.games, &prices);
-    if json {
-        let report = serde_json::json!({ "items": rows, "totals": cart::totals(&rows) });
-        let text = serde_json::to_string_pretty(&report).expect("cart report serializes");
-        writeln!(io::stdout(), "{text}").ok();
-    } else {
-        writeln!(io::stdout(), "{}", output::format_cart_rows(&rows)).ok();
     }
 }
 

@@ -1,5 +1,4 @@
 pub mod cache;
-pub mod cart;
 pub mod config;
 pub mod itad;
 pub mod loader;

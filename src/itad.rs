@@ -30,8 +30,6 @@ pub struct SteamPrice {
     pub price: Money,
     pub regular: Money,
     pub cut: u32,
-    /// Steam's own all-time low, which ITAD reports without a date.
-    pub store_low: Option<Money>,
 }
 
 /// The cheapest current price across shops.
@@ -218,7 +216,6 @@ pub fn parse_steam_prices(v: &Value) -> HashMap<String, SteamPrice> {
                             price: money(deal.get("price")?)?,
                             regular: money(deal.get("regular")?)?,
                             cut: cut(deal)?,
-                            store_low: deal.get("storeLow").and_then(money),
                         },
                     ))
                 })
