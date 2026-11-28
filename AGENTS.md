@@ -80,7 +80,7 @@ Each source converts an external format into `Vec<Game>`. Two kinds:
   used (`nile` or `heroic_cache`).
 
 ### Prices (`itad.rs`)
-Thin IsThereAnyDeal client, called only by `bouncer price`. It keeps no cache
+Thin IsThereAnyDeal client, called by `bouncer price` and `bouncer cart`. It keeps no cache
 by design: prices go stale fast, so every run asks ITAD again.
 
 ### Steam cart (`cart.rs`)
