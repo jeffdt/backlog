@@ -80,8 +80,27 @@ Each source converts an external format into `Vec<Game>`. Two kinds:
   used (`nile` or `heroic_cache`).
 
 ### Prices (`itad.rs`)
-Thin IsThereAnyDeal client, called only by `bouncer price`. It keeps no cache
+Thin IsThereAnyDeal client, called by `bouncer price` and `bouncer cart`. It keeps no cache
 by design: prices go stale fast, so every run asks ITAD again.
+
+### Steam cart (`cart.rs`)
+Backs `bouncer cart`. Steam's cart API (`IAccountCartService/GetCart`)
+rejects Web API keys and only accepts the store session's `webapi_token`.
+That token grants full account access, so it is read from stdin, used for one
+call, and never written anywhere; stdin that is a terminal is refused so it
+never echoes on screen. The cart lists package and bundle IDs only; the public,
+unauthenticated `IStoreBrowseService/GetItems` turns them into names and
+contained games, whose app IDs go through `itad::check_prices` for lows.
+Bundles are priced from the cart, not the store: Steam leaves games the user
+owns on Steam out of a bundle, and only the cart price reflects that, so those
+games are marked excluded and left out of the comparison. Games owned on
+another platform are still sold in the bundle, so they mark it owned instead.
+The price is judged against the all-time low from any store first, then
+Steam's own low (ITAD's `storeLow` on the Steam deal, which has no date), so
+"Steam sold it cheaper" stands apart from "a key reseller went lower".
+The closing totals (cart, best current price, Steam low, all-time low) use the same
+received-games rule, so a bundle with nothing new adds zero to every
+total but the cart's.
 
 ### Cache + config (`cache.rs`, `config.rs`)
 - Cache files carry `last_updated` (RFC3339), `source`, and `games`. Caches
