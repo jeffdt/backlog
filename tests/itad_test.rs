@@ -100,6 +100,9 @@ fn parse_steam_prices_reads_steam_deal() {
     assert_eq!(s.price.amount, 7.49);
     assert_eq!(s.regular.amount, 29.99);
     assert_eq!(s.cut, 75);
+    assert_eq!(s.store_low.as_ref().map(|m| m.amount), Some(7.49));
+    let hades = &m[HADES];
+    assert_eq!(hades.store_low, None);
 }
 
 #[test]
