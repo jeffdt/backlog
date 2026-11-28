@@ -19,12 +19,16 @@ macOS / Apple Silicon focused.
 
 Shared skills (`mockup`, `vhs-recording`, `cutting-a-release`, `live-preview`)
 come from the `tui-utils` plugin (github.com/jeffdt/tui-utils), not this
-repo. One-time per machine:
+repo. One-time per machine, at user scope:
 
 ```
 /plugin marketplace add jeffdt/tui-utils
 /plugin install tui-utils@tui-utils
 ```
+
+This repo's per-app modifiers for those skills live in
+`[package.metadata.tui-utils]` in `Cargo.toml` (keys documented in the
+plugin's README).
 
 ## Commands
 
@@ -233,11 +237,6 @@ re-recorded in the same PR. See the `vhs-recording` skill (from the
 
 ## Working in this repo
 
-- **Always work in a dedicated `wt switch --create jeffdt/<domain>-<brief-desc>`
-  worktree, never directly in this main checkout.** Create the worktree
-  first, even for an edit that feels too small to bother. A worktree per
-  feature branch is what keeps concurrent or resumed sessions safe; the main
-  checkout should stay clean and always reflect `origin/main`.
 - **When pulling an issue from GitHub to work on, check the other open
   issues for ones that would make sense to bundle into the same PR**
   (`gh issue list --state open`) before starting. Look for genuine overlap,
@@ -254,7 +253,7 @@ re-recorded in the same PR. See the `vhs-recording` skill (from the
   method, dimensions, color constraints, and cleanup rules. Skip this for
   changes with no visual surface (model/logic-only work).
 - **Leave a live preview when a feature is done.** Once a feature is
-  implemented and tests pass, use the built-in `run` skill to launch the
+  implemented and tests pass, use the `live-preview` skill to launch the
   freshly built binary so the change is confirmed against the real running
   app, not just green test output.
 - **Changes land via pull request.** Work on a feature branch named
