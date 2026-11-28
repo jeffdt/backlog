@@ -3,6 +3,9 @@ name = "bouncer"
 version = "0.11.0"
 edition = "2024"
 
+[package.metadata.tui-utils]
+config_isolation = "home"
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
