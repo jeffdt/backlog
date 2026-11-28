@@ -1,4 +1,5 @@
-use crate::itad::{GamePrice, MatchKind, Money, PriceGroup};
+use crate::cart::{self, CartRow, ItemKind, Verdict};
+use crate::itad::{GamePrice, LowPrice, MatchKind, Money, PriceGroup};
 use crate::queue::{PLAYED_GLYPH, QUEUED_GLYPH, Queue};
 use crate::search::SearchResult;
 use crate::{LibraryEntry, queue};
@@ -90,6 +91,41 @@ fn with_cut(price: &Money, cut: u32) -> String {
     }
 }
 
+fn column_widths<'a, const N: usize>(
+    rows: impl IntoIterator<Item = &'a [String; N]>,
+) -> [usize; N] {
+    let mut widths = [0; N];
+    for row in rows {
+        for (w, cell) in widths.iter_mut().zip(row) {
+            *w = (*w).max(cell.chars().count());
+        }
+    }
+    widths
+}
+
+/// Pads every cell but the last to its column width, two spaces apart,
+/// dropping columns that are empty in every row.
+fn render_aligned<const N: usize>(row: &[String; N], widths: &[usize; N]) -> String {
+    let cells: Vec<String> = row
+        .iter()
+        .zip(widths)
+        .enumerate()
+        .filter(|(i, (_, w))| **w > 0 || i + 1 == N)
+        .map(|(i, (cell, w))| {
+            if i + 1 == N {
+                cell.clone()
+            } else {
+                format!("{cell:<w$}")
+            }
+        })
+        .collect();
+    cells.join("  ").trim_end().to_string()
+}
+
+fn low_cell(l: &LowPrice) -> String {
+    format!("{} {} {}", format_money(&l.price), l.shop, l.date)
+}
+
 fn price_cells(g: &GamePrice) -> [String; 3] {
     let dash = || "-".to_string();
     [
@@ -99,9 +135,7 @@ fn price_cells(g: &GamePrice) -> [String; 3] {
         g.best.as_ref().map_or_else(dash, |b| {
             format!("{} {}", with_cut(&b.price, b.cut), b.shop)
         }),
-        g.low.as_ref().map_or_else(dash, |l| {
-            format!("{} {} {}", format_money(&l.price), l.shop, l.date)
-        }),
+        g.low.as_ref().map_or_else(dash, low_cell),
     ]
 }
 
@@ -141,26 +175,8 @@ pub fn format_price_groups(groups: &[PriceGroup]) -> String {
             .chain(&exact)
             .chain(candidates.iter().flat_map(|(_, rows)| rows))
     };
-    let widths: [usize; 4] =
-        std::array::from_fn(|i| all_rows().map(|r| r[i].chars().count()).max().unwrap_or(0));
-    let render = |r: &[String; 5]| {
-        let kind = if widths[1] > 0 {
-            format!("{:<w$}  ", r[1], w = widths[1])
-        } else {
-            String::new()
-        };
-        let line = format!(
-            "{:<w0$}  {kind}{:<w2$}  {:<w3$}  {}",
-            r[0],
-            r[2],
-            r[3],
-            r[4],
-            w0 = widths[0],
-            w2 = widths[2],
-            w3 = widths[3]
-        );
-        line.trim_end().to_string()
-    };
+    let widths = column_widths(all_rows());
+    let render = |r: &[String; 5]| render_aligned(r, &widths);
 
     let mut lines = vec![render(&header)];
     lines.extend(exact.iter().map(render));
@@ -170,4 +186,97 @@ pub fn format_price_groups(groups: &[PriceGroup]) -> String {
         lines.extend(rows.iter().map(render));
     }
     lines.join("\n")
+}
+
+fn verdict_label(v: Verdict) -> &'static str {
+    match v {
+        Verdict::AtLow => "at low",
+        Verdict::AboveLow => "above low",
+        Verdict::Owned => "already owned",
+        Verdict::NothingNew => "nothing new",
+        Verdict::Unknown => "no low known",
+    }
+}
+
+/// Formats judged cart items as an aligned table followed by cart totals.
+///
+/// Bundles, and packages holding more than one game, list their games
+/// underneath with each game's low or why it does not count.
+pub fn format_cart_rows(rows: &[CartRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut table = vec![["Item", "Cart", "All-time low", ""].map(String::from)];
+    for row in rows {
+        let receiving: Vec<_> = row.apps.iter().filter(|a| !a.excluded).collect();
+        let low = match (receiving.as_slice(), &row.low_total) {
+            ([only], Some(_)) => only.low.as_ref().map_or_else(String::new, low_cell),
+            (_, Some(total)) => format_money(total),
+            (_, None) => "-".to_string(),
+        };
+        let name = match row.kind {
+            ItemKind::Bundle => format!("{} (bundle)", row.name),
+            ItemKind::Package => row.name.clone(),
+        };
+        let mut verdict = verdict_label(row.verdict).to_string();
+        if row.verdict == Verdict::Owned {
+            let mut platforms: Vec<&str> = receiving
+                .iter()
+                .flat_map(|a| &a.owned_on)
+                .map(String::as_str)
+                .collect();
+            platforms.sort_unstable();
+            platforms.dedup();
+            verdict = format!("{verdict} ({})", platforms.join(" / "));
+        }
+        table.push([name, format_money(&row.price), low, verdict]);
+        if row.kind == ItemKind::Package && row.apps.len() <= 1 {
+            continue;
+        }
+        for app in &row.apps {
+            let note = if app.excluded {
+                "owned on steam, excluded".to_string()
+            } else if app.owned_on.is_empty() {
+                String::new()
+            } else {
+                format!("owned on {}", app.owned_on.join(" / "))
+            };
+            let low = if app.excluded {
+                String::new()
+            } else {
+                app.low.as_ref().map_or_else(|| "-".to_string(), low_cell)
+            };
+            table.push([format!("  {}", app.name), String::new(), low, note]);
+        }
+    }
+    let widths = column_widths(&table);
+    let mut lines: Vec<String> = table.iter().map(|r| render_aligned(r, &widths)).collect();
+    lines.push(String::new());
+    lines.extend(format_cart_totals(&cart::totals(rows)));
+    lines.join("\n")
+}
+
+fn format_cart_totals(t: &cart::CartTotals) -> Vec<String> {
+    let left_out = |n: usize| match n {
+        0 => String::new(),
+        1 => "  (1 item with no price left out)".to_string(),
+        n => format!("  ({n} items with no price left out)"),
+    };
+    let rows = [
+        ("Cart total", format_money(&t.cart), String::new()),
+        (
+            "At best prices now",
+            format_money(&t.best_now),
+            left_out(t.best_now_missing),
+        ),
+        (
+            "At all-time lows",
+            format_money(&t.low),
+            left_out(t.low_missing),
+        ),
+    ];
+    let width = rows.iter().map(|r| r.1.chars().count()).max().unwrap_or(0);
+    rows.iter()
+        .map(|(label, amount, note)| format!("{label:<18}  {amount:>width$}{note}"))
+        .collect()
 }

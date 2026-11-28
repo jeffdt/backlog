@@ -28,7 +28,7 @@ credentials in `~/.config/bouncer/config.json`.
 
 It also asks for an optional
 [IsThereAnyDeal API key](https://isthereanydeal.com/apps/my/), which `bouncer price`
-needs. Press Enter to skip it and rerun `setup` later to add it.
+and `bouncer cart` need. Press Enter to skip it and rerun `setup` later to add it.
 
 ## Usage
 
@@ -78,6 +78,41 @@ Hades II     $20.99 -30%  $20.99 -30% Steam      $20.99 Steam 2026-06-25
 Outer Wilds  $12.49 -50%  $9.75 -61% GameBillet  $9.75 GameBillet 2026-10-31
 Hades        $6.24 -75%   $6.24 -75% Steam       $6.24 Steam 2025-09-17
 ```
+
+### Steam cart
+
+Checks every item in your Steam cart against your library (on any platform)
+and its all-time low, so you can prune the cart before checkout. Bundles are
+priced as Steam prices them for you: games you already own on Steam drop out
+of the bundle and out of the comparison.
+
+Steam only exposes the cart to your logged-in store session, so this needs
+that session's token, piped in and never saved. While logged in, open
+<https://store.steampowered.com/pointssummary/ajaxgetasyncconfig>, copy the
+`webapi_token` value, then:
+
+```console
+$ pbpaste | bouncer cart
+Item                                 Cart    All-time low
+Prince of Persia New Era (bundle)    $8.09   $8.99 Steam 2026-06-25       at low
+  The Rogue Prince of Persia                 $8.99 Steam 2026-06-25
+  Prince of Persia The Lost Crown                                         owned on steam, excluded
+Detroit: Become Human                $3.99   $3.64 AllYouPlay 2025-12-24  above low
+Hades II                             $20.99  $20.99 Steam 2026-06-25      at low
+Felix the Reaper                     $0.99   $0.50 Gamer Thor 2024-11-11  already owned (epic)
+...
+
+Cart total          $142.16
+At best prices now  $129.83
+At all-time lows    $119.78
+```
+
+The totals price every item at Steam's cart price, at the cheapest store
+selling it today, and at its all-time low. Items with no known price are
+left out of a total, and the total says how many.
+
+The token gives full access to your Steam account until it expires, so treat
+it like a password.
 
 ### Sync
 
