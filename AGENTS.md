@@ -90,9 +90,11 @@ by design: prices go stale fast, so every run asks ITAD again.
 ### Steam cart (`cart.rs`)
 Backs `bouncer cart`. Steam's cart API (`IAccountCartService/GetCart`)
 rejects Web API keys and only accepts the store session's `webapi_token`.
-That token grants full account access, so it is read from stdin, used for one
-call, and never written anywhere; stdin that is a terminal is refused so it
-never echoes on screen. The cart lists package and bundle IDs only; the public,
+That token grants full account access, so it is read from the
+`BOUNCER_STEAM_TOKEN` env var (paste once per shell, reuse until it expires)
+or else from stdin, and never written anywhere; stdin that is a terminal is
+refused so it never echoes on screen. The token is a JWT, so its `exp` claim
+is decoded locally and an expired token is refused before any network call. The cart lists package and bundle IDs only; the public,
 unauthenticated `IStoreBrowseService/GetItems` turns them into names and
 contained games, whose app IDs go through `itad::check_prices` for lows.
 Bundles are priced from the cart, not the store: Steam leaves games the user

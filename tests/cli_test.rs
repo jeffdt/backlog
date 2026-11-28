@@ -208,11 +208,21 @@ fn search_subcommand_searches_even_when_the_query_is_a_command_name() {
     assert!(stderr.contains("No games loaded"), "stderr: {stderr}");
 }
 
+const EXPIRED_TOKEN: &str = "eyAidHlwIjogIkpXVCIgfQ.eyJleHAiOjE3MDAwMDAwMDB9.sig";
+
 fn run_cart_with_stdin(home: &std::path::Path, stdin: &str) -> std::process::Output {
+    run_cart(home, None, stdin)
+}
+
+fn run_cart(home: &std::path::Path, env_token: Option<&str>, stdin: &str) -> std::process::Output {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_bouncer"))
-        .env("HOME", home)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bouncer"));
+    cmd.env("HOME", home).env_remove("BOUNCER_STEAM_TOKEN");
+    if let Some(token) = env_token {
+        cmd.env("BOUNCER_STEAM_TOKEN", token);
+    }
+    let mut child = cmd
         .arg("cart")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -244,4 +254,47 @@ fn cart_without_itad_key_exits_with_setup_hint_before_using_the_token() {
 
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("bouncer setup"));
+}
+
+#[test]
+fn cart_reads_token_from_env_var_over_empty_stdin() {
+    let home = tempfile::TempDir::new().unwrap();
+    let out = run_cart(home.path(), Some("token"), "");
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("bouncer setup"));
+}
+
+#[test]
+fn cart_rejects_expired_env_token_before_any_network_call() {
+    let home = tempfile::TempDir::new().unwrap();
+    let out = run_cart(home.path(), Some(EXPIRED_TOKEN), "");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("BOUNCER_STEAM_TOKEN") && stderr.contains("expired"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn cart_rejects_expired_stdin_token_before_any_network_call() {
+    let home = tempfile::TempDir::new().unwrap();
+    let out = run_cart_with_stdin(home.path(), EXPIRED_TOKEN);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("expired") && !stderr.contains("BOUNCER_STEAM_TOKEN"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn cart_ignores_blank_env_var_and_reads_stdin() {
+    let home = tempfile::TempDir::new().unwrap();
+    let out = run_cart(home.path(), Some("  "), "  \n");
+
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no token"));
 }

@@ -384,3 +384,32 @@ At Steam lows       $18.47  (1 item with no price left out)
 At all-time lows    $18.08";
     assert_eq!(format_cart_rows(&rows), want);
 }
+
+#[test]
+fn token_expiry_reads_jwt_exp() {
+    const CASES: &[(&str, Option<i64>)] = &[
+        (
+            "eyAidHlwIjogIkpXVCIgfQ.eyJleHAiOjE3MDAwMDAwMDB9.sig",
+            Some(1700000000),
+        ),
+        ("h.eyJleHAiOjE3MDAwMDAwMDAxfQ==.s", Some(17000000001)),
+        ("h.eyJleHAiOjE3MDAwMDAwMDAxfQ.s", Some(17000000001)),
+        (
+            "h.eyJpc3MiOiJzdGVhbSIsInN1YiI6Ijc2NTYxMTkiLCJhdWQiOlsid2ViOnN0b3JlIl0sImV4cCI6MTc2NDQwMDAwMCwieCI6Ij8_Pj5-fiJ9.s",
+            Some(1764400000),
+        ),
+        ("h.eyJpc3MiOiJzdGVhbSJ9.s", None),
+        ("eyJleHAiOjE3MDAwMDAwMDB9", None),
+        ("h.not*base64.s", None),
+        ("h.bm90IGpzb24.s", None),
+        ("", None),
+    ];
+    let misses: Vec<String> = CASES
+        .iter()
+        .filter_map(|&(token, want)| {
+            let got = token_expiry(token);
+            (got != want).then(|| format!("{token:?}: want {want:?}, got {got:?}"))
+        })
+        .collect();
+    assert!(misses.is_empty(), "\n{}", misses.join("\n"));
+}

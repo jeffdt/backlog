@@ -87,12 +87,14 @@ priced as Steam prices them for you: games you already own on Steam drop out
 of the bundle and out of the comparison.
 
 Steam only exposes the cart to your logged-in store session, so this needs
-that session's token, piped in and never saved. While logged in, open
+that session's token, which bouncer never saves. While logged in, open
 <https://store.steampowered.com/pointssummary/ajaxgetasyncconfig>, copy the
-`webapi_token` value, then:
+`webapi_token` value, and export it once per shell (the `$(pbpaste)` form keeps
+it out of shell history):
 
 ```console
-$ pbpaste | bouncer cart
+$ export BOUNCER_STEAM_TOKEN=$(pbpaste)
+$ bouncer cart
 Item                                 Cart    Steam low  All-time low
 Prince of Persia New Era (bundle)    $8.09   $8.99      $8.99 Steam 2026-06-25       at low
   The Rogue Prince of Persia                 $8.99      $8.99 Steam 2026-06-25
