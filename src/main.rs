@@ -77,9 +77,17 @@ Exits 1 if any input could not be found."#;
 const CART_LONG_ABOUT: &str = r#"Judge every item in your Steam cart.
 
 Each item is checked against your synced library (any platform) and its
-IsThereAnyDeal all-time low, then marked: at low, above low, already
-owned, nothing new (a bundle whose games you all own on Steam), or no
-low known.
+IsThereAnyDeal price history, then marked:
+  at low           at or under the all-time low from any store
+  at Steam low     at or under Steam's own low, but another store went lower
+  above Steam low  Steam itself has sold it cheaper
+  above low        above the all-time low, with no Steam low known
+  already owned    you own a game in it on some platform
+  nothing new      a bundle whose games you all own on Steam
+  no low known     no price history to compare against
+
+Totals follow: the cart, every item at today's cheapest store, at
+Steam's lows, and at all-time lows.
 
 Bundles use the cart price, since Steam leaves games you own on Steam
 out of a bundle; those games are shown as excluded and do not count.
@@ -246,7 +254,12 @@ fn run_cart(json: bool) {
         .zip(groups)
         .map(|(id, g)| {
             let game = g.games.into_iter().next();
-            (id, game.map_or((None, None), |g| (g.best, g.low)))
+            let prices = game.map_or_else(cart::AppPrices::default, |g| cart::AppPrices {
+                steam_low: g.steam.and_then(|s| s.store_low),
+                best: g.best,
+                low: g.low,
+            });
+            (id, prices)
         })
         .collect();
 

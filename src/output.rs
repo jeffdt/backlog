@@ -191,6 +191,8 @@ pub fn format_price_groups(groups: &[PriceGroup]) -> String {
 fn verdict_label(v: Verdict) -> &'static str {
     match v {
         Verdict::AtLow => "at low",
+        Verdict::AtSteamLow => "at Steam low",
+        Verdict::AboveSteamLow => "above Steam low",
         Verdict::AboveLow => "above low",
         Verdict::Owned => "already owned",
         Verdict::NothingNew => "nothing new",
@@ -206,14 +208,16 @@ pub fn format_cart_rows(rows: &[CartRow]) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    let mut table = vec![["Item", "Cart", "All-time low", ""].map(String::from)];
+    let dash = || "-".to_string();
+    let mut table = vec![["Item", "Cart", "Steam low", "All-time low", ""].map(String::from)];
     for row in rows {
         let receiving: Vec<_> = row.apps.iter().filter(|a| !a.excluded).collect();
         let low = match (receiving.as_slice(), &row.low_total) {
             ([only], Some(_)) => only.low.as_ref().map_or_else(String::new, low_cell),
             (_, Some(total)) => format_money(total),
-            (_, None) => "-".to_string(),
+            (_, None) => dash(),
         };
+        let steam_low = row.steam_low_total.as_ref().map_or_else(dash, format_money);
         let name = match row.kind {
             ItemKind::Bundle => format!("{} (bundle)", row.name),
             ItemKind::Package => row.name.clone(),
@@ -229,7 +233,7 @@ pub fn format_cart_rows(rows: &[CartRow]) -> String {
             platforms.dedup();
             verdict = format!("{verdict} ({})", platforms.join(" / "));
         }
-        table.push([name, format_money(&row.price), low, verdict]);
+        table.push([name, format_money(&row.price), steam_low, low, verdict]);
         if row.kind == ItemKind::Package && row.apps.len() <= 1 {
             continue;
         }
@@ -241,12 +245,16 @@ pub fn format_cart_rows(rows: &[CartRow]) -> String {
             } else {
                 format!("owned on {}", app.owned_on.join(" / "))
             };
-            let low = if app.excluded {
-                String::new()
+            let (steam_low, low) = if app.excluded {
+                (String::new(), String::new())
             } else {
-                app.low.as_ref().map_or_else(|| "-".to_string(), low_cell)
+                (
+                    app.steam_low.as_ref().map_or_else(dash, format_money),
+                    app.low.as_ref().map_or_else(dash, low_cell),
+                )
             };
-            table.push([format!("  {}", app.name), String::new(), low, note]);
+            let name = format!("  {}", app.name);
+            table.push([name, String::new(), steam_low, low, note]);
         }
     }
     let widths = column_widths(&table);
@@ -262,18 +270,12 @@ fn format_cart_totals(t: &cart::CartTotals) -> Vec<String> {
         1 => "  (1 item with no price left out)".to_string(),
         n => format!("  ({n} items with no price left out)"),
     };
+    let total = |label, t: &cart::Total| (label, format_money(&t.amount), left_out(t.missing));
     let rows = [
         ("Cart total", format_money(&t.cart), String::new()),
-        (
-            "At best prices now",
-            format_money(&t.best_now),
-            left_out(t.best_now_missing),
-        ),
-        (
-            "At all-time lows",
-            format_money(&t.low),
-            left_out(t.low_missing),
-        ),
+        total("At best prices now", &t.best_now),
+        total("At Steam lows", &t.steam_low),
+        total("At all-time lows", &t.low),
     ];
     let width = rows.iter().map(|r| r.1.chars().count()).max().unwrap_or(0);
     rows.iter()

@@ -52,12 +52,28 @@ fn low(amount: f64) -> LowPrice {
     }
 }
 
-/// All-time lows only, with no current best price.
-fn lows(known: &[(u64, f64)]) -> HashMap<u64, (Option<BestPrice>, Option<LowPrice>)> {
+/// All-time lows from any store only, with no current best price or Steam low.
+fn lows(known: &[(u64, f64)]) -> HashMap<u64, AppPrices> {
     known
         .iter()
-        .map(|(id, amount)| (*id, (None, Some(low(*amount)))))
+        .map(|(id, amount)| {
+            let prices = AppPrices {
+                low: Some(low(*amount)),
+                ..Default::default()
+            };
+            (*id, prices)
+        })
         .collect()
+}
+
+fn with_steam_lows(
+    mut prices: HashMap<u64, AppPrices>,
+    steam: &[(u64, f64)],
+) -> HashMap<u64, AppPrices> {
+    for (id, amount) in steam {
+        prices.entry(*id).or_default().steam_low = Some(usd(*amount));
+    }
+    prices
 }
 
 #[test]
@@ -178,6 +194,64 @@ fn assess_judges_each_cart_item() {
     assert!(misses.is_empty(), "\n{}", misses.join("\n"));
 }
 
+/// Each row: all-time lows from any store, Steam's own lows, then the
+/// verdicts in cart order, with Lost Crown and Blasphemous owned on Steam so
+/// each bundle receives one game (Rogue Prince at $8.09, Blasphemous 2 at $6.74).
+type SteamLowCase = (
+    &'static str,
+    &'static [(u64, f64)],
+    &'static [(u64, f64)],
+    [Verdict; 3],
+);
+
+const STEAM_LOW_CASES: &[SteamLowCase] = &[
+    (
+        "beating Steam's low but not a reseller's is at Steam low",
+        &[(DETROIT, 3.64), (ROGUE_PRINCE, 8.99), (BLASPHEMOUS_2, 1.99)],
+        &[(DETROIT, 3.99), (ROGUE_PRINCE, 8.99), (BLASPHEMOUS_2, 7.49)],
+        [Verdict::AtSteamLow, Verdict::AtLow, Verdict::AtSteamLow],
+    ),
+    (
+        "Steam having sold it cheaper is above Steam low",
+        &[(DETROIT, 2.00), (ROGUE_PRINCE, 5.00), (BLASPHEMOUS_2, 1.99)],
+        &[(DETROIT, 2.50), (ROGUE_PRINCE, 6.00), (BLASPHEMOUS_2, 5.00)],
+        [
+            Verdict::AboveSteamLow,
+            Verdict::AboveSteamLow,
+            Verdict::AboveSteamLow,
+        ],
+    ),
+    (
+        "a Steam low alone still judges the price",
+        &[],
+        &[(DETROIT, 3.99), (ROGUE_PRINCE, 7.00)],
+        [
+            Verdict::AtSteamLow,
+            Verdict::AboveSteamLow,
+            Verdict::Unknown,
+        ],
+    ),
+];
+
+#[test]
+fn assess_compares_to_steam_low_after_the_all_time_low() {
+    let (lines, items) = (lines(), items());
+    let owned = library(&[
+        ("Prince of Persia The Lost Crown", "steam"),
+        ("Blasphemous", "steam"),
+    ]);
+    let mut misses = Vec::new();
+    for (name, any_lows, steam_lows, want) in STEAM_LOW_CASES {
+        let prices = with_steam_lows(lows(any_lows), steam_lows);
+        let rows = assess(&lines, &items, &owned, &prices);
+        let got: Vec<Verdict> = rows.iter().map(|r| r.verdict).collect();
+        if got != want {
+            misses.push(format!("{name}: want {want:?}, got {got:?}"));
+        }
+    }
+    assert!(misses.is_empty(), "\n{}", misses.join("\n"));
+}
+
 #[test]
 fn package_uses_live_price_and_bundle_uses_cart_price() {
     let mut lines = lines();
@@ -208,15 +282,28 @@ fn item_without_a_game_list_is_unknown_not_nothing_new() {
 }
 
 #[test]
-fn totals_sum_cart_best_now_and_lows_counting_unpriced_items() {
+fn totals_sum_cart_best_now_and_both_lows_counting_unpriced_items() {
     let best = |amount: f64| BestPrice {
         price: usd(amount),
         cut: 50,
         shop: "GOG".to_string(),
     };
     let prices = HashMap::from([
-        (DETROIT, (Some(best(3.00)), Some(low(2.50)))),
-        (ROGUE_PRINCE, (Some(best(9.50)), None)),
+        (
+            DETROIT,
+            AppPrices {
+                best: Some(best(3.00)),
+                steam_low: Some(usd(3.50)),
+                low: Some(low(2.50)),
+            },
+        ),
+        (
+            ROGUE_PRINCE,
+            AppPrices {
+                best: Some(best(9.50)),
+                ..Default::default()
+            },
+        ),
     ]);
     // Owning both Blasphemous games on Steam leaves that bundle nothing new, which costs nothing.
     let owned = library(&[
@@ -229,10 +316,18 @@ fn totals_sum_cart_best_now_and_lows_counting_unpriced_items() {
         t,
         CartTotals {
             cart: usd(3.99 + 8.09 + 6.74),
-            best_now: usd(3.00 + 9.50),
-            best_now_missing: 0,
-            low: usd(2.50),
-            low_missing: 1,
+            best_now: Total {
+                amount: usd(3.00 + 9.50),
+                missing: 0,
+            },
+            steam_low: Total {
+                amount: usd(3.50),
+                missing: 1,
+            },
+            low: Total {
+                amount: usd(2.50),
+                missing: 1,
+            },
         }
     );
 }
@@ -259,25 +354,33 @@ fn format_cart_rows_lists_bundle_games_under_the_bundle() {
             ("Prince of Persia The Lost Crown", "steam"),
             ("Detroit: Become Human", "gog"),
         ]),
-        &lows(&[
-            (DETROIT, 3.99),
-            (ROGUE_PRINCE, 8.09),
-            (BLASPHEMOUS, 2.0),
-            (BLASPHEMOUS_2, 5.0),
-        ]),
+        &with_steam_lows(
+            lows(&[
+                (DETROIT, 3.99),
+                (ROGUE_PRINCE, 8.09),
+                (BLASPHEMOUS, 1.0),
+                (BLASPHEMOUS_2, 5.0),
+            ]),
+            &[
+                (ROGUE_PRINCE, 8.99),
+                (BLASPHEMOUS, 1.99),
+                (BLASPHEMOUS_2, 7.49),
+            ],
+        ),
     );
     let want = "\
-Item                                         Cart   All-time low
-Detroit: Become Human                        $3.99  $3.99 Steam 2025-11-27  already owned (gog)
-Prince of Persia New Era (bundle)            $8.09  $8.09 Steam 2025-11-27  at low
-  The Rogue Prince of Persia                        $8.09 Steam 2025-11-27
-  Prince of Persia The Lost Crown                                           owned on steam, excluded
-Blasphemous + Blasphemous 2 Bundle (bundle)  $6.74  $7.00                   at low
-  Blasphemous                                       $2.00 Steam 2025-11-27
-  Blasphemous 2                                     $5.00 Steam 2025-11-27
+Item                                         Cart   Steam low  All-time low
+Detroit: Become Human                        $3.99  -          $3.99 Steam 2025-11-27  already owned (gog)
+Prince of Persia New Era (bundle)            $8.09  $8.99      $8.09 Steam 2025-11-27  at low
+  The Rogue Prince of Persia                        $8.99      $8.09 Steam 2025-11-27
+  Prince of Persia The Lost Crown                                                      owned on steam, excluded
+Blasphemous + Blasphemous 2 Bundle (bundle)  $6.74  $9.48      $6.00                   at Steam low
+  Blasphemous                                       $1.99      $1.00 Steam 2025-11-27
+  Blasphemous 2                                     $7.49      $5.00 Steam 2025-11-27
 
 Cart total          $18.82
 At best prices now   $0.00  (3 items with no price left out)
-At all-time lows    $19.08";
+At Steam lows       $18.47  (1 item with no price left out)
+At all-time lows    $18.08";
     assert_eq!(format_cart_rows(&rows), want);
 }

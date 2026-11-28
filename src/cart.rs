@@ -41,11 +41,26 @@ pub struct StoreItem {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
+    /// At or under the all-time low from any store.
     AtLow,
+    /// At or under Steam's own all-time low, but another store has gone lower.
+    AtSteamLow,
+    /// Steam itself has sold it cheaper.
+    AboveSteamLow,
+    /// Above the all-time low, with no Steam low known.
     AboveLow,
     Owned,
     NothingNew,
     Unknown,
+}
+
+/// What a game has cost and costs now, as IsThereAnyDeal reports it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AppPrices {
+    /// Cheapest current price across stores.
+    pub best: Option<BestPrice>,
+    pub steam_low: Option<Money>,
+    pub low: Option<LowPrice>,
 }
 
 /// A game inside a cart item.
@@ -58,6 +73,7 @@ pub struct CartApp {
     pub excluded: bool,
     /// Cheapest current price across stores.
     pub best: Option<BestPrice>,
+    pub steam_low: Option<Money>,
     pub low: Option<LowPrice>,
 }
 
@@ -69,22 +85,29 @@ pub struct CartRow {
     pub price: Money,
     /// Sum of the cheapest current prices for the games this purchase would add.
     pub best_total: Option<Money>,
+    /// Sum of Steam's all-time lows for the games this purchase would add.
+    pub steam_low_total: Option<Money>,
     /// Sum of all-time lows for the games this purchase would add.
     pub low_total: Option<Money>,
     pub verdict: Verdict,
     pub apps: Vec<CartApp>,
 }
 
-/// What the whole cart costs at Steam, at today's best prices, and at all-time lows.
-///
-/// Items with no known price for a total are left out of it and counted.
+/// One cart-wide total, with the number of items it leaves out for lack of a price.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Total {
+    pub amount: Money,
+    pub missing: usize,
+}
+
+/// What the whole cart costs at Steam, at today's best prices, at Steam's
+/// all-time lows, and at all-time lows from any store.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CartTotals {
     pub cart: Money,
-    pub best_now: Money,
-    pub best_now_missing: usize,
-    pub low: Money,
-    pub low_missing: usize,
+    pub best_now: Total,
+    pub steam_low: Total,
+    pub low: Total,
 }
 
 /// Sums each item's prices; assumes the cart is in a single currency.
@@ -92,29 +115,24 @@ pub fn totals(rows: &[CartRow]) -> CartTotals {
     let currency = rows
         .first()
         .map_or_else(|| "USD".to_string(), |r| r.price.currency.clone());
-    let sum = |amounts: Vec<Option<f64>>| {
-        let missing = amounts.iter().filter(|a| a.is_none()).count();
-        let money = Money {
-            amount: amounts.into_iter().flatten().fold(0.0, |a, b| a + b),
-            currency: currency.clone(),
-        };
-        (money, missing)
+    let sum = |amount_of: fn(&CartRow) -> Option<&Money>| {
+        let amounts: Vec<Option<f64>> = rows
+            .iter()
+            .map(|r| amount_of(r).map(|m| m.amount))
+            .collect();
+        Total {
+            missing: amounts.iter().filter(|a| a.is_none()).count(),
+            amount: Money {
+                amount: amounts.into_iter().flatten().fold(0.0, |a, b| a + b),
+                currency: currency.clone(),
+            },
+        }
     };
-    let (cart, _) = sum(rows.iter().map(|r| Some(r.price.amount)).collect());
-    let (best_now, best_now_missing) = sum(rows
-        .iter()
-        .map(|r| r.best_total.as_ref().map(|m| m.amount))
-        .collect());
-    let (low, low_missing) = sum(rows
-        .iter()
-        .map(|r| r.low_total.as_ref().map(|m| m.amount))
-        .collect());
     CartTotals {
-        cart,
-        best_now,
-        best_now_missing,
-        low,
-        low_missing,
+        cart: sum(|r| Some(&r.price)).amount,
+        best_now: sum(|r| r.best_total.as_ref()),
+        steam_low: sum(|r| r.steam_low_total.as_ref()),
+        low: sum(|r| r.low_total.as_ref()),
     }
 }
 
@@ -227,19 +245,20 @@ pub fn parse_store_items(v: &Value) -> HashMap<(ItemKind, u64), StoreItem> {
         .collect()
 }
 
-/// Judges each cart line against the library and the best current and all-time
-/// low prices keyed by app id.
+/// Judges each cart line against the library and each game's prices keyed by app id.
 ///
 /// Bundles are priced from the cart, because Steam leaves games the user owns
 /// on Steam out of a bundle and only the cart price reflects that; those games
 /// are marked excluded and left out of the comparison. Packages use the live
 /// store price when there is one, so a sale that started after the game was
 /// added still counts. A game owned on any platform marks the item `Owned`.
+/// The price is compared to the all-time low from any store first, then to
+/// Steam's own all-time low.
 pub fn assess(
     lines: &[CartLine],
     items: &HashMap<(ItemKind, u64), StoreItem>,
     library: &[LibraryEntry],
-    prices: &HashMap<u64, (Option<BestPrice>, Option<LowPrice>)>,
+    prices: &HashMap<u64, AppPrices>,
 ) -> Vec<CartRow> {
     let owned: HashMap<String, &Vec<String>> = library
         .iter()
@@ -266,7 +285,11 @@ pub fn assess(
                         .get(&queue::normalize_key(app_name))
                         .map(|p| p.to_vec())
                         .unwrap_or_default();
-                    let (best, low) = prices.get(appid).cloned().unwrap_or((None, None));
+                    let AppPrices {
+                        best,
+                        steam_low,
+                        low,
+                    } = prices.get(appid).cloned().unwrap_or_default();
                     CartApp {
                         appid: *appid,
                         name: app_name.clone(),
@@ -274,6 +297,7 @@ pub fn assess(
                             && owned_on.iter().any(|p| p == "steam"),
                         owned_on,
                         best,
+                        steam_low,
                         low,
                     }
                 })
@@ -286,7 +310,10 @@ pub fn assess(
                     .flatten()
             };
             let best_total = total(|a| a.best.as_ref().map(|b| &b.price));
+            let steam_low_total = total(|a| a.steam_low.as_ref());
             let low_total = total(|a| a.low.as_ref().map(|l| &l.price));
+            // Half a cent of slack so float sums of cent amounts compare as equal.
+            let at_or_under = |m: &Money| price.amount <= m.amount + 0.005;
             let verdict = if apps.is_empty() {
                 Verdict::Unknown
             } else if receiving.is_empty() {
@@ -294,11 +321,12 @@ pub fn assess(
             } else if receiving.iter().any(|a| !a.owned_on.is_empty()) {
                 Verdict::Owned
             } else {
-                match &low_total {
-                    // Half a cent of slack so float sums of cent amounts compare as equal.
-                    Some(low) if price.amount <= low.amount + 0.005 => Verdict::AtLow,
-                    Some(_) => Verdict::AboveLow,
-                    None => Verdict::Unknown,
+                match (&low_total, &steam_low_total) {
+                    (Some(low), _) if at_or_under(low) => Verdict::AtLow,
+                    (_, Some(steam)) if at_or_under(steam) => Verdict::AtSteamLow,
+                    (_, Some(_)) => Verdict::AboveSteamLow,
+                    (Some(_), None) => Verdict::AboveLow,
+                    (None, None) => Verdict::Unknown,
                 }
             };
             CartRow {
@@ -306,6 +334,7 @@ pub fn assess(
                 kind: line.kind,
                 price,
                 best_total,
+                steam_low_total,
                 low_total,
                 verdict,
                 apps,

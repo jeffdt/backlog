@@ -93,22 +93,26 @@ that session's token, piped in and never saved. While logged in, open
 
 ```console
 $ pbpaste | bouncer cart
-Item                                 Cart    All-time low
-Prince of Persia New Era (bundle)    $8.09   $8.99 Steam 2026-06-25       at low
-  The Rogue Prince of Persia                 $8.99 Steam 2026-06-25
-  Prince of Persia The Lost Crown                                         owned on steam, excluded
-Detroit: Become Human                $3.99   $3.64 AllYouPlay 2025-12-24  above low
-Hades II                             $20.99  $20.99 Steam 2026-06-25      at low
-Felix the Reaper                     $0.99   $0.50 Gamer Thor 2024-11-11  already owned (epic)
+Item                                 Cart    Steam low  All-time low
+Prince of Persia New Era (bundle)    $8.09   $8.99      $8.99 Steam 2026-06-25       at low
+  The Rogue Prince of Persia                 $8.99      $8.99 Steam 2026-06-25
+  Prince of Persia The Lost Crown                                                    owned on steam, excluded
+Detroit: Become Human                $3.99   $3.99      $3.64 AllYouPlay 2025-12-24  at Steam low
+Haiku, the Robot                     $6.79   $3.99      $3.99 Steam 2025-08-11       above Steam low
+Hades II                             $20.99  $20.99     $20.99 Steam 2026-06-25      at low
+Felix the Reaper                     $0.99   $0.99      $0.50 Gamer Thor 2024-11-11  already owned (epic)
 ...
 
 Cart total          $142.16
 At best prices now  $129.83
+At Steam lows       $127.95
 At all-time lows    $119.78
 ```
 
-The totals price every item at Steam's cart price, at the cheapest store
-selling it today, and at its all-time low. Items with no known price are
+"At Steam low" means it beats Steam's own history but another store has gone
+lower; "above Steam low" means Steam itself has sold it cheaper. The totals
+price every item at Steam's cart price, at the cheapest store selling it
+today, at Steam's low, and at its all-time low from any store. Items with no known price are
 left out of a total, and the total says how many.
 
 The token gives full access to your Steam account until it expires, so treat

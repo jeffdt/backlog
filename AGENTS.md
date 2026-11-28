@@ -95,9 +95,12 @@ Bundles are priced from the cart, not the store: Steam leaves games the user
 owns on Steam out of a bundle, and only the cart price reflects that, so those
 games are marked excluded and left out of the comparison. Games owned on
 another platform are still sold in the bundle, so they mark it owned instead.
-The closing totals (cart, best current price, all-time low) use the same
-received-games rule, so a bundle with nothing new adds zero to the
-best-price and all-time-low totals.
+The price is judged against the all-time low from any store first, then
+Steam's own low (ITAD's `storeLow` on the Steam deal, which has no date), so
+"Steam sold it cheaper" stands apart from "a key reseller went lower".
+The closing totals (cart, best current price, Steam low, all-time low) use the same
+received-games rule, so a bundle with nothing new adds zero to every
+total but the cart's.
 
 ### Cache + config (`cache.rs`, `config.rs`)
 - Cache files carry `last_updated` (RFC3339), `source`, and `games`. Caches

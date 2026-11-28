@@ -15,6 +15,11 @@
           "amount": 29.99,
           "currency": "USD"
         },
+        "storeLow": {
+          "amount": 7.49,
+          "amountInt": 749,
+          "currency": "USD"
+        },
         "cut": 75
       }
     ]
