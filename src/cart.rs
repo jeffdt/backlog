@@ -1,5 +1,7 @@
 //! Reads a Steam cart and judges each item against the library and all-time lows.
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -363,37 +365,12 @@ fn get_json(url: &str, query: &[(&str, &str)]) -> Result<Value, String> {
 /// Reads the `exp` claim (unix seconds) from a JWT such as Steam's `webapi_token`,
 /// without verifying it. `None` when the token isn't a decodable JWT with `exp`.
 pub fn token_expiry(token: &str) -> Option<i64> {
-    let mut parts = token.split('.');
-    let payload = match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some(_), Some(p), Some(_), None) => p,
-        _ => return None,
+    let [_, payload, _] = token.split('.').collect::<Vec<_>>()[..] else {
+        return None;
     };
-    let json: Value = serde_json::from_slice(&decode_base64url(payload)?).ok()?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    let json: Value = serde_json::from_slice(&bytes).ok()?;
     json.get("exp")?.as_i64()
-}
-
-/// Decodes base64url (padding optional), the encoding of JWT segments.
-fn decode_base64url(text: &str) -> Option<Vec<u8>> {
-    let mut bits: u32 = 0;
-    let mut nbits = 0;
-    let mut out = Vec::new();
-    for c in text.trim_end_matches('=').bytes() {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            _ => return None,
-        };
-        bits = (bits << 6) | u32::from(v);
-        nbits += 6;
-        if nbits >= 8 {
-            nbits -= 8;
-            out.push((bits >> nbits) as u8);
-        }
-    }
-    Some(out)
 }
 
 /// Fetches the cart of the user who owns `token` (a store `webapi_token`).

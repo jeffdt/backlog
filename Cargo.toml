@@ -7,6 +7,7 @@ edition = "2024"
 config_isolation = "home"
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"

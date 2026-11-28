@@ -231,21 +231,23 @@ fn run_cart(json: bool) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     };
-    let env_token = std::env::var(TOKEN_ENV_VAR).unwrap_or_default();
-    let from_env = !env_token.trim().is_empty();
-    let mut token = env_token;
-    if !from_env {
+    let env_token = std::env::var(TOKEN_ENV_VAR)
+        .ok()
+        .filter(|t| !t.trim().is_empty());
+    let from_env = env_token.is_some();
+    let token = env_token.unwrap_or_else(|| {
         // Refuse a terminal so the token is never typed where it echoes on screen.
         if io::stdin().is_terminal() {
             fail(format!(
                 "export {TOKEN_ENV_VAR}=$(pbpaste) or pipe your Steam store token in. See `bouncer cart --help`."
             ));
         }
-        token.clear();
+        let mut token = String::new();
         io::stdin()
             .read_to_string(&mut token)
             .unwrap_or_else(|e| fail(format!("could not read token: {e}")));
-    }
+        token
+    });
     let token = token.trim();
     if token.is_empty() {
         fail("no token on stdin. See `bouncer cart --help`.".to_string());
